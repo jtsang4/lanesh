@@ -25,7 +25,10 @@ export default defineConfig({
 		proxy: {
 			'/api': apiTarget,
 			'/healthz': apiTarget,
-			'/lanes': { target: apiTarget, ws: true },
+			// Only the server's own lane endpoints; /lanes/<id>/... pages belong to the SPA.
+			'^/lanes/[^/]+/(mcp|join|connect|membership)': { target: apiTarget, ws: true },
+			'/install.sh': apiTarget,
+			'/install.ps1': apiTarget,
 			'/transfers': apiTarget
 		}
 	}

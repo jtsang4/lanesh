@@ -4,6 +4,21 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="referrer" content="no-referrer" />
+		<script>
+			// Apply the saved theme and language before first paint to avoid a flash.
+			(function () {
+				try {
+					var t = localStorage.getItem('lanesh.theme');
+					var dark =
+						t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+					document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+					var l = localStorage.getItem('lanesh.locale');
+					if (l === 'zh-CN') document.documentElement.lang = 'zh-CN';
+				} catch (e) {}
+			})();
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

@@ -15,6 +15,10 @@ Lanesh gives an agent one MCP endpoint that reaches all of your machines. Throug
 - **Run** commands on a specific machine, including long-running background jobs
 - **Move** files and directories between machines
 
+A web UI shows every lane, machine and skill, manages keys, and keeps an audit log of everything agents do.
+
+![Skills across the machines of a lane](docs/images/skills-dark.png)
+
 ## How it works
 
 ```
@@ -94,6 +98,8 @@ claude mcp add --transport http lanesh https://lanesh.example.com/lanes/<lane-id
 ```
 
 Any MCP client that supports Streamable HTTP works. Pass the access key as `Authorization: Bearer <access-key>`, or as `?key=<access-key>` if the client cannot set headers. If the agent's own machine is in the lane, add `?machine=<name>` so that Lanesh can tell the agent which machine is its own.
+
+![A machine and one of its skills](docs/images/machine-light.png)
 
 ## MCP tools
 

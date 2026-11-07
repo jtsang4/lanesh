@@ -16,10 +16,14 @@
 		"format": "oxfmt && oxlint --fix"
 	},
 	"devDependencies": {
+		"@fontsource-variable/geist": "^5.3.0",
+		"@fontsource-variable/geist-mono": "^5.3.0",
 		"@sveltejs/adapter-static": "^4.0.1",
 		"@sveltejs/kit": "^3.1.1",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@types/node": "^26.6.6",
+		"dompurify": "^3.4.17",
+		"marked": "^18.1.3",
 		"oxfmt": "^0.77.0",
 		"oxlint": "^1.92.0",
 		"svelte": "^5.57.3",
