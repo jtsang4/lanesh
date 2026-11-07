@@ -92,7 +92,7 @@ func TestBackgroundJobStdin(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		r, err := m.Read(protocol.JobReadParams{JobID: st.JobID})
+		r, err := m.Read(context.Background(), protocol.JobReadParams{JobID: st.JobID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,6 +105,29 @@ func TestBackgroundJobStdin(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("job did not finish")
+}
+
+func TestJobReadWaitsForOutput(t *testing.T) {
+	m := NewManager(Options{})
+	cmd := "sleep 1; echo late"
+	if runtime.GOOS == "windows" {
+		cmd = "Start-Sleep -Seconds 1; Write-Output late"
+	}
+	st, err := m.Start(context.Background(), protocol.ExecParams{Command: cmd, Background: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	r, err := m.Read(context.Background(), protocol.JobReadParams{JobID: st.JobID, WaitMS: 20_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.Data, "late") && !r.EOF {
+		t.Fatalf("read returned without output: %+v", r)
+	}
+	if time.Since(start) > 15*time.Second {
+		t.Fatal("read waited for the full timeout")
+	}
 }
 
 func TestPTYUnsupported(t *testing.T) {

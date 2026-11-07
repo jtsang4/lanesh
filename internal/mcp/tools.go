@@ -171,6 +171,7 @@ type JobReadInput struct {
 	Stream  string `json:"stream,omitempty" jsonschema:"stdout (default) or stderr"`
 	Offset  int64  `json:"offset,omitempty" jsonschema:"byte offset; use next_offset from the previous call"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"maximum bytes (default 65536, max 1048576)"`
+	WaitMS  int    `json:"wait_ms,omitempty" jsonschema:"if there is no output beyond offset yet, wait up to this long (max 60000) for new output or for the job to finish"`
 }
 
 func (t *Tools) jobRead(ctx context.Context, req *mcp.CallToolRequest, in JobReadInput) (*mcp.CallToolResult, protocol.JobReadResult, error) {
@@ -184,7 +185,7 @@ func (t *Tools) jobRead(ctx context.Context, req *mcp.CallToolRequest, in JobRea
 	}
 	var res protocol.JobReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobRead,
-		protocol.JobReadParams{JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, Limit: in.Limit}, &res)
+		protocol.JobReadParams{JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, Limit: in.Limit, WaitMS: in.WaitMS}, &res)
 	return nil, res, protoErr(err)
 }
 

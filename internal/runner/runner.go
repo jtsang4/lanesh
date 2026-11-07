@@ -26,6 +26,7 @@ const (
 	DefaultRetention = time.Hour
 	DefaultReadLimit = 64 << 10
 	MaxReadLimit     = 1 << 20
+	MaxReadWait      = time.Minute
 )
 
 // Errors returned by the manager.
@@ -258,11 +259,16 @@ func (m *Manager) get(id string) (*job, error) {
 	return j, nil
 }
 
-// Read returns a range of a job's output stream ("stdout" or "stderr").
-func (m *Manager) Read(p protocol.JobReadParams) (protocol.JobReadResult, error) {
+// Read returns a range of a job's output stream ("stdout" or "stderr"). With
+// p.WaitMS it first waits until there is output beyond p.Offset or the job
+// has finished.
+func (m *Manager) Read(ctx context.Context, p protocol.JobReadParams) (protocol.JobReadResult, error) {
 	j, err := m.get(p.JobID)
 	if err != nil {
 		return protocol.JobReadResult{}, err
+	}
+	if p.WaitMS > 0 {
+		j.waitForOutput(ctx, p.Stream, p.Offset, min(time.Duration(p.WaitMS)*time.Millisecond, MaxReadWait))
 	}
 	stream := p.Stream
 	if stream == "" {
@@ -293,6 +299,31 @@ func (m *Manager) Read(p protocol.JobReadParams) (protocol.JobReadResult, error)
 		Offset: start, NextOffset: next, Total: total, Dropped: dropped,
 		Data: toText(data), EOF: status != protocol.JobRunning && next >= total,
 	}, nil
+}
+
+func (j *job) waitForOutput(ctx context.Context, stream string, offset int64, wait time.Duration) {
+	r := j.stdout
+	if stream == "stderr" {
+		r = j.stderr
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, _, total, _ := r.ReadAt(offset, 0); total > offset {
+			return
+		}
+		select {
+		case <-j.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // Write sends data to a job's stdin and optionally closes it.

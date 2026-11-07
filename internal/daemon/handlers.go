@@ -110,7 +110,7 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 		if !c.ownsJob(p.JobID) {
 			return nil, fmt.Errorf("%s: %w", p.JobID, runner.ErrNotFound)
 		}
-		return d.jobs.Read(p)
+		return d.jobs.Read(ctx, p)
 
 	case protocol.MethodJobWrite:
 		p, err := decodeParams[protocol.JobWriteParams](raw)

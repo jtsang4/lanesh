@@ -238,12 +238,14 @@ type JobStatus struct {
 	Owner           string `json:"owner,omitempty"`
 }
 
-// JobReadParams reads a range of a job's output.
+// JobReadParams reads a range of a job's output. With WaitMS, the read waits
+// for output beyond Offset (or for the job to finish) before returning.
 type JobReadParams struct {
 	JobID  string `json:"job_id"`
 	Stream string `json:"stream,omitempty"`
 	Offset int64  `json:"offset,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
+	WaitMS int    `json:"wait_ms,omitempty"`
 }
 
 // JobReadResult answers MethodJobRead.
