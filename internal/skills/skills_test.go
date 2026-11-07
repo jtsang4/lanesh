@@ -140,6 +140,31 @@ func TestRead(t *testing.T) {
 	}
 }
 
+func TestReadRejectsSymlinksLeavingTheSkill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	home := t.TempDir()
+	srcs := DefaultSources(home)
+	d := writeSkill(t, srcs[0].Dir, "a", "---\nname: a\n---", nil)
+	secret := filepath.Join(home, "secret.txt")
+	_ = os.WriteFile(secret, []byte("s3cret"), 0o600)
+	if err := os.Symlink(secret, filepath.Join(d, "leak.txt")); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(d, "real.txt"), []byte("ok"), 0o600)
+	if err := os.Symlink("real.txt", filepath.Join(d, "alias.txt")); err != nil {
+		t.Fatal(err)
+	}
+	idx := Scan(srcs)
+	if _, err := Read(idx, protocol.SkillReadParams{Skill: "a", Path: "leak.txt"}); err == nil {
+		t.Fatal("symlink to a file outside the skill must be rejected")
+	}
+	if res, err := Read(idx, protocol.SkillReadParams{Skill: "a", Path: "alias.txt"}); err != nil || res.Content != "ok" {
+		t.Fatalf("symlink inside the skill: %+v %v", res, err)
+	}
+}
+
 func TestWatchReportsChanges(t *testing.T) {
 	home := t.TempDir()
 	srcs := DefaultSources(home)

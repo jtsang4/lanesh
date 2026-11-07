@@ -27,6 +27,7 @@ const (
 	DefaultReadLimit = 64 << 10
 	MaxReadLimit     = 1 << 20
 	MaxReadWait      = time.Minute
+	MaxRunning       = 64
 )
 
 // Errors returned by the manager.
@@ -34,6 +35,7 @@ var (
 	ErrNotFound    = errors.New("job not found")
 	ErrUnsupported = errors.New("pty is not supported yet")
 	ErrNotRunning  = errors.New("job is not running")
+	ErrTooMany     = fmt.Errorf("too many running jobs (limit %d); stop some with job_kill first", MaxRunning)
 )
 
 // Options configures a Manager.
@@ -104,6 +106,9 @@ func (m *Manager) Start(ctx context.Context, p protocol.ExecParams, dir string) 
 	}
 	if strings.TrimSpace(p.Command) == "" {
 		return protocol.JobStatus{}, errors.New("command is empty")
+	}
+	if m.running() >= MaxRunning {
+		return protocol.JobStatus{}, ErrTooMany
 	}
 	sh, err := ResolveShell(p.Shell)
 	if err != nil {
@@ -418,6 +423,18 @@ func (m *Manager) Shutdown() {
 			_ = j.group.kill()
 		}
 	}
+}
+
+func (m *Manager) running() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, j := range m.jobs {
+		if status, _, _ := j.state(); status == protocol.JobRunning {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Manager) gcLocked() {

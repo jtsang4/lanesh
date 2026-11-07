@@ -264,7 +264,11 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 	if !filepath.IsLocal(rel) {
 		return protocol.SkillReadResult{}, ErrOutside
 	}
-	res, err := files.ReadFile(filepath.Join(s.Path, rel), p.Offset, p.Limit, "")
+	target, err := within(s.Path, rel)
+	if err != nil {
+		return protocol.SkillReadResult{}, err
+	}
+	res, err := files.ReadFile(target, p.Offset, p.Limit, "")
 	if err != nil {
 		return protocol.SkillReadResult{}, err
 	}
@@ -276,6 +280,23 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 		out.Files = Tree(s.Path)
 	}
 	return out, nil
+}
+
+// within resolves rel inside dir and rejects targets that symbolic links
+// lead outside of the (resolved) skill directory.
+func within(dir, rel string) (string, error) {
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", dir, ErrNotFound)
+	}
+	target, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", filepath.ToSlash(rel), ErrNotFound)
+	}
+	if r, err := filepath.Rel(root, target); err != nil || !filepath.IsLocal(r) {
+		return "", ErrOutside
+	}
+	return target, nil
 }
 
 // Tree lists files under dir (relative, slash-separated), skipping noise.
