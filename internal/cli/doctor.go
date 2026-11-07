@@ -86,7 +86,7 @@ func newDoctorCmd() *cobra.Command {
 			if len(cfg.Lanes) == 0 {
 				c.warn("no lanes joined")
 			}
-			st, stErr := daemon.ReadState(p)
+			st, live := liveState(p)
 			for _, l := range cfg.Lanes {
 				name := l.LaneName + " (" + l.Server + ")"
 				if creds[l.Key()] == "" {
@@ -101,7 +101,7 @@ func newDoctorCmd() *cobra.Command {
 						c.warn("%s: server is newer than this lanesh (%s); the daemon updates itself automatically", name, version.Version)
 					}
 				}
-				if stErr == nil && svc.Running {
+				if live {
 					for _, ls := range st.Lanes {
 						if ls.LaneID != l.LaneID {
 							continue

@@ -291,8 +291,7 @@ func newStatusCmd() *cobra.Command {
 			if m, err := serviceManager(); err == nil {
 				svc, _ = m.Status()
 			}
-			st, stErr := daemon.ReadState(p)
-			fresh := stErr == nil && time.Since(st.UpdatedAt) < 10*time.Minute && svc.Running
+			st, fresh := liveState(p)
 			if asJSON {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"service": svc, "state": st, "config": cfg})
 			}
@@ -316,7 +315,7 @@ func newStatusCmd() *cobra.Command {
 			fmt.Fprintln(w, "Lanes:")
 			for _, l := range cfg.Lanes {
 				line := fmt.Sprintf("  %-20s %s as %s", l.LaneName, l.Server, l.MachineName)
-				state := "unknown"
+				state := "daemon not running (start it with `lanesh start` or `lanesh daemon`)"
 				if fresh {
 					state = "not connected"
 					for _, ls := range st.Lanes {
@@ -509,6 +508,16 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&target, "version", "", "install a specific version (may downgrade)")
 	cmd.Flags().BoolVar(&check, "check", false, "only report whether an update is available")
 	return cmd
+}
+
+// liveState returns the state written by a running daemon, whether it runs
+// as the background service or in the foreground.
+func liveState(p daemon.Paths) (daemon.State, bool) {
+	st, err := daemon.ReadState(p)
+	if err != nil {
+		return st, false
+	}
+	return st, processAlive(st.PID) && time.Since(st.UpdatedAt) < time.Minute
 }
 
 func runQuiet(name string, args ...string) (string, error) {
