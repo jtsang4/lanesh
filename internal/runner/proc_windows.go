@@ -32,7 +32,7 @@ func attach(cmd *exec.Cmd) (*procGroup, error) {
 		},
 	}
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		uintptr(unsafe.Pointer(&info)) /* #nosec G103 -- required by the Win32 API */, uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(job)
 		return nil, err
 	}
