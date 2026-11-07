@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -129,6 +130,40 @@ func TestMemberships(t *testing.T) {
 	got, _, err := s.Skills(ctx, l.ID, "m1")
 	if err != nil || got.Hash != "h" || len(got.Skills) != 1 {
 		t.Fatalf("skills = %+v err = %v", got, err)
+	}
+}
+
+func TestSkillHistory(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	l, _ := s.CreateLane(ctx, "home")
+	other, _ := s.CreateLane(ctx, "other")
+	save := func(lane, hash string) {
+		t.Helper()
+		if err := s.SaveSkills(ctx, lane, "m1", protocol.SkillIndex{Hash: hash, Skills: []protocol.Skill{{Name: hash}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range SkillHistoryLimit + 5 {
+		save(l.ID, fmt.Sprintf("h%02d", i))
+	}
+	save(l.ID, "h10") // a version that comes back becomes the newest
+	save(other.ID, "x")
+
+	hist, err := s.SkillHistory(ctx, l.ID, "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != SkillHistoryLimit || hist[0].Hash != "h10" || hist[1].Hash != "h24" {
+		t.Fatalf("history = %d entries, first %q, %q", len(hist), hist[0].Hash, hist[1].Hash)
+	}
+	for _, h := range hist {
+		if h.Hash == "h00" || h.Hash == "x" {
+			t.Fatalf("history contains %q", h.Hash)
+		}
+	}
+	if got, _, _ := s.Skills(ctx, l.ID, "m1"); got.Hash != "h10" {
+		t.Fatalf("snapshot = %q", got.Hash)
 	}
 }
 

@@ -202,6 +202,14 @@ func (b backend) UpdateSkills(ctx context.Context, laneID, machineID string, idx
 	_ = b.s.store.SaveSkills(context.WithoutCancel(ctx), laneID, machineID, idx)
 }
 
+func (b backend) SkillHistory(ctx context.Context, laneID, machineID string) []protocol.SkillIndex {
+	hist, err := b.s.store.SkillHistory(ctx, laneID, machineID)
+	if err != nil {
+		return nil
+	}
+	return hist
+}
+
 // laneServers caches one MCP server per lane, rebuilt when the lane's
 // instructions (which include its machine roster) change.
 type laneServers struct {

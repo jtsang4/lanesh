@@ -72,6 +72,15 @@ var migrations = []string{
 		updated_at INTEGER NOT NULL,
 		PRIMARY KEY (lane_id, machine_id)
 	);
+	CREATE TABLE skill_history (
+		lane_id TEXT NOT NULL REFERENCES lanes(id) ON DELETE CASCADE,
+		machine_id TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		index_json TEXT NOT NULL,
+		seen_at INTEGER NOT NULL,
+		PRIMARY KEY (lane_id, machine_id, hash)
+	);
+	CREATE INDEX skill_history_recent ON skill_history(lane_id, machine_id, seen_at);
 	CREATE TABLE admin_sessions (
 		hash TEXT PRIMARY KEY,
 		created_at INTEGER NOT NULL,

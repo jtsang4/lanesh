@@ -406,6 +406,21 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 - `transfer` 两端都需要简报时，在一次返回中给出两台机器的简报。
 
+**相对于各会话自身认知的变化报告**
+
+不同会话对同一台机器的认知不同：旧会话可能已经读过某个 skill 的旧版本，需要知道具体哪个变了；新会话拿到的就是最新状态，不需要任何"更新"提示。所以变化是相对于**调用方所持令牌**来计算的，而不是按时间：
+
+- Server 为每个 (Lane, 机器) 保存最近 20 个 skill 索引版本（`skill_history`）。每次签发令牌都要先经过一次 describe，并把结果写入历史，所以令牌对应的版本一定在历史里，除非它已经被更新的版本挤出去了。这里记录的是机器的状态历史，与会话无关。
+- 收到过时令牌时，Server 在历史版本中逐个校验，找到令牌签发时对应的版本，与当前版本按 skill 名称比较，在简报开头列出：
+  ```
+  Changes since your last briefing:
+  + log-rotate (new)
+  ~ deploy-preview (updated; if you read it before, read it again with read_skill before relying on it)
+  - pdf-tools (removed)
+  ```
+  描述变化或任何文件内容变化都算作 updated，因为每个 skill 都有自己的内容哈希。如果只是同名 skill 的优先级发生变化，会单独说明。
+- **没有令牌**（例如新会话）时，返回不带变化标记的普通简报；令牌无法识别，或者早于保留的历史时，只说明令牌未知，不列差异。
+
 **效果**
 
 - Agent 忘记令牌（例如上下文被压缩）时，下一次调用会直接收到简报，恢复只需一次重试，并且恰好在它需要时重新了解了这台机器。
@@ -449,6 +464,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - `keys`：`id`、`lane_id`、`kind`（`join` / `access`）、`name`、`hash`、`prefix`、`expires_at`、`created_at`、`last_used_at`、`revoked_at`
 - `memberships`：`lane_id`、`machine_id`、`display_name`、`credential_hash`、`os`、`arch`、`hostname`、`version`、`expose_skills`、`allow_exec`、`joined_at`、`last_seen`、`revoked_at`
 - `skill_snapshots`：`lane_id`、`machine_id`、`index_json`、`updated_at`（用于离线时在 UI 中展示）
+- `skill_history`：`lane_id`、`machine_id`、`hash`、`index_json`、`seen_at`。每个 (Lane, 机器) 保留最近 20 个 skill 索引版本，用于生成变化报告（§8.4）
 - `admin_sessions`：Web UI 登录会话
 - `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
 

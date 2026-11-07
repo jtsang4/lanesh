@@ -47,12 +47,19 @@ func yesNo(b bool) string {
 // renderBriefing formats a machine briefing for an agent. The first lines say
 // what happened and exactly how to retry, because models act on them; the
 // briefing below is the same information describe_machine returns.
-func renderBriefing(m Machine, d protocol.DescribeResult, token, reason, tool, param string) string {
+//
+// changes, when not empty, lists what changed since the caller's last
+// briefing (see renderChanges).
+func renderBriefing(m Machine, d protocol.DescribeResult, token, reason, tool, param, changes string) string {
 	var b strings.Builder
 	env := d.Environment
 	fmt.Fprintf(&b, "Nothing was run on %q: %s.\n", m.Name, reason)
 	fmt.Fprintf(&b, "Next step: read the briefing below, then repeat the same %s call with %s %q. "+
 		"This reply already is the machine's full briefing, so do not call describe_machine for it.\n\n", tool, param, token)
+	if changes != "" {
+		b.WriteString(changes)
+		b.WriteString("\n\n")
+	}
 	fmt.Fprintf(&b, "Machine: %s (%s/%s), user %s, home %s\n", m.Name, env.OS, env.Arch, env.User, env.Home)
 	fmt.Fprintf(&b, "Shell: %s", env.DefaultShell)
 	if len(env.Shells) > 0 {
@@ -76,6 +83,58 @@ func renderBriefing(m Machine, d protocol.DescribeResult, token, reason, tool, p
 		fmt.Fprintf(&b, "Hidden by a same-named skill with higher priority: %s\n", strings.Join(names, ", "))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// SkillChanges is the difference between two skill index versions.
+type SkillChanges struct {
+	Added   []protocol.Skill
+	Updated []protocol.Skill
+	Removed []protocol.Skill
+}
+
+// diffSkills compares skills by name. A skill counts as updated when its
+// description or any of its files changed.
+func diffSkills(old, cur protocol.SkillIndex) SkillChanges {
+	before := make(map[string]protocol.Skill, len(old.Skills))
+	for _, s := range old.Skills {
+		before[s.Name] = s
+	}
+	var ch SkillChanges
+	for _, s := range cur.Skills {
+		prev, ok := before[s.Name]
+		switch {
+		case !ok:
+			ch.Added = append(ch.Added, s)
+		case prev.Hash != s.Hash || prev.Description != s.Description:
+			ch.Updated = append(ch.Updated, s)
+		}
+		delete(before, s.Name)
+	}
+	for _, s := range old.Skills {
+		if _, gone := before[s.Name]; gone {
+			ch.Removed = append(ch.Removed, s)
+		}
+	}
+	return ch
+}
+
+// renderChanges formats skill changes for a briefing; it is empty when only
+// something else (such as which same-named skill takes priority) changed.
+func renderChanges(ch SkillChanges) string {
+	var b strings.Builder
+	for _, s := range ch.Added {
+		fmt.Fprintf(&b, "\n+ %s (new)", s.Name)
+	}
+	for _, s := range ch.Updated {
+		fmt.Fprintf(&b, "\n~ %s (updated; if you read it before, read it again with read_skill before relying on it)", s.Name)
+	}
+	for _, s := range ch.Removed {
+		fmt.Fprintf(&b, "\n- %s (removed)", s.Name)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "Changes since your last briefing:" + b.String()
 }
 
 // Limits for the instructions text: Claude Code keeps the first 2,048

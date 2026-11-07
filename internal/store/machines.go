@@ -186,16 +186,67 @@ func (s *Store) RevokeMembership(ctx context.Context, laneID, machineID string) 
 	return expectOne(s.db.ExecContext(ctx, "UPDATE memberships SET revoked_at = ? WHERE lane_id = ? AND machine_id = ? AND revoked_at IS NULL", s.unix(), laneID, machineID))
 }
 
-// SaveSkills stores the latest skill index a machine reported to a lane.
+// SkillHistoryLimit is how many recent skill index versions are kept per
+// machine and lane, so that an outdated briefing token can be matched to the
+// version it was issued for.
+const SkillHistoryLimit = 20
+
+// SaveSkills stores the latest skill index a machine reported to a lane and
+// records it in the machine's version history.
 func (s *Store) SaveSkills(ctx context.Context, laneID, machineID string, idx protocol.SkillIndex) error {
 	raw, err := json.Marshal(idx)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO skill_snapshots (lane_id, machine_id, index_json, updated_at) VALUES (?, ?, ?, ?)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // No-op after commit.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO skill_snapshots (lane_id, machine_id, index_json, updated_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT(lane_id, machine_id) DO UPDATE SET index_json = excluded.index_json, updated_at = excluded.updated_at`,
-		laneID, machineID, string(raw), s.unix())
-	return err
+		laneID, machineID, string(raw), s.unix()); err != nil {
+		return err
+	}
+	if idx.Hash != "" {
+		// seen_at orders versions by when they were last current; a version
+		// that comes back (e.g. a reverted change) becomes the newest again.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_history (lane_id, machine_id, hash, index_json, seen_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(lane_id, machine_id, hash) DO UPDATE SET seen_at = excluded.seen_at`,
+			laneID, machineID, idx.Hash, string(raw), s.now().UnixNano()); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM skill_history WHERE lane_id = ? AND machine_id = ? AND hash NOT IN (
+			SELECT hash FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seen_at DESC LIMIT ?)`,
+			laneID, machineID, laneID, machineID, SkillHistoryLimit); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SkillHistory returns the recent skill index versions of a machine in a
+// lane, newest first.
+func (s *Store) SkillHistory(ctx context.Context, laneID, machineID string) ([]protocol.SkillIndex, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT index_json FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seen_at DESC",
+		laneID, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []protocol.SkillIndex
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var idx protocol.SkillIndex
+		if err := json.Unmarshal([]byte(raw), &idx); err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, rows.Err()
 }
 
 // Skills returns the last skill index a machine reported to a lane.

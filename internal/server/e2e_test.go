@@ -359,17 +359,35 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// Once the machine's skills change, the old token yields a fresh briefing
-	// that lists the new skill, and the new token works.
+	// that says exactly what changed relative to that token, and the new token works.
 	writeSkill(t, a.home, "fresh")
+	if err := os.WriteFile(filepath.Join(a.home, ".agents", "skills", "deploy", "scripts", "data.txt"), []byte("payload-v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var fresh string
 	for deadline := time.Now().Add(15 * time.Second); fresh == ""; {
 		_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("true", "$null")})
-		if strings.Contains(errText, "- fresh: The fresh skill") {
+		if strings.Contains(errText, "+ fresh (new)") && strings.Contains(errText, "~ deploy (updated") {
+			if !strings.Contains(errText, "changed since your last briefing") || strings.Contains(errText, "~ review") {
+				t.Fatalf("change report: %q", errText)
+			}
 			fresh = regexp.MustCompile(`with briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)[1]
 		} else if time.Now().After(deadline) {
-			t.Fatalf("old token still accepted after the skills changed: %q", errText)
+			t.Fatalf("no precise change report after the skills changed: %q", errText)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+
+	// A new session has no token: it gets the current briefing, with nothing
+	// marked as changed. An unrecognized token gets no change report either.
+	s2 := h.mcpClient(h.access)
+	_, errText = call(t, s2, "exec", map[string]any{"machine": "alpha", "briefing": "", "command": "echo hi"})
+	if !strings.Contains(errText, "- fresh: The fresh skill") || strings.Contains(errText, "Changes since") {
+		t.Fatalf("new session briefing: %q", errText)
+	}
+	_, errText = call(t, s2, "exec", map[string]any{"machine": "alpha", "briefing": "alpha:aaaaaaaa", "command": "echo hi"})
+	if !strings.Contains(errText, "unknown") || strings.Contains(errText, "Changes since") {
+		t.Fatalf("unknown token briefing: %q", errText)
 	}
 	if fresh == briefA {
 		t.Fatal("token must change with the skills")
@@ -385,7 +403,8 @@ func TestEndToEnd(t *testing.T) {
 			deploy = &laneSkills[i]
 		}
 	}
-	if deploy == nil || len(deploy.Machines) != 2 || !deploy.Consistent {
+	// alpha's copy of deploy was modified above, so the two copies now differ.
+	if deploy == nil || len(deploy.Machines) != 2 || deploy.Consistent {
 		t.Fatalf("lane skills = %+v", laneSkills)
 	}
 	var audit []map[string]any

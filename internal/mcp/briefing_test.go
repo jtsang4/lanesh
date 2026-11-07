@@ -36,6 +36,32 @@ func TestInstructionsFitClientLimits(t *testing.T) {
 	}
 }
 
+func TestDiffSkills(t *testing.T) {
+	old := protocol.SkillIndex{Skills: []protocol.Skill{
+		{Name: "keep", Hash: "1", Description: "same"},
+		{Name: "content", Hash: "2", Description: "same"},
+		{Name: "described", Hash: "3", Description: "old words"},
+		{Name: "gone", Hash: "4"},
+	}}
+	cur := protocol.SkillIndex{Skills: []protocol.Skill{
+		{Name: "keep", Hash: "1", Description: "same"},
+		{Name: "content", Hash: "2b", Description: "same"},
+		{Name: "described", Hash: "3", Description: "new words"},
+		{Name: "fresh", Hash: "5"},
+	}}
+	got := renderChanges(diffSkills(old, cur))
+	want := "Changes since your last briefing:\n+ fresh (new)" +
+		"\n~ content (updated; if you read it before, read it again with read_skill before relying on it)" +
+		"\n~ described (updated; if you read it before, read it again with read_skill before relying on it)" +
+		"\n- gone (removed)"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if renderChanges(diffSkills(old, old)) != "" {
+		t.Fatal("identical versions must render no changes")
+	}
+}
+
 func TestRenderBriefingAndJoin(t *testing.T) {
 	d := protocol.DescribeResult{
 		Environment: protocol.Environment{OS: "darwin", Arch: "arm64", User: "u", Home: "/Users/u", DefaultShell: "zsh", Shells: []string{"bash", "zsh"}},
@@ -45,7 +71,10 @@ func TestRenderBriefingAndJoin(t *testing.T) {
 			Shadowed: []protocol.ShadowedSkill{{Name: "pdf", Source: "claude"}},
 		},
 	}
-	text := renderBriefing(Machine{Name: "mac"}, d, "mac:abcdefgh", "no briefing token was given", "transfer", "to_briefing")
+	text := renderBriefing(Machine{Name: "mac"}, d, "mac:abcdefgh", "no briefing token was given", "transfer", "to_briefing", "")
+	if strings.Contains(text, "Changes since") {
+		t.Fatalf("a briefing without changes must not mention them:\n%s", text)
+	}
 	for _, want := range []string{`Nothing was run on "mac"`, `repeat the same transfer call with to_briefing "mac:abcdefgh"`, "do not call describe_machine", "Shell: zsh (available: bash, zsh)", "- deploy: Deploy things", "pdf (claude)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)

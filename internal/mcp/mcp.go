@@ -39,6 +39,8 @@ type Backend interface {
 	// UpdateSkills records a skill index just read from a machine, so that
 	// briefing tokens are issued and checked against the same state.
 	UpdateSkills(ctx context.Context, laneID, machineID string, idx protocol.SkillIndex)
+	// SkillHistory returns the machine's recent skill index versions, newest first.
+	SkillHistory(ctx context.Context, laneID, machineID string) []protocol.SkillIndex
 	Transfer(ctx context.Context, laneID string, from, to Machine, fromPath, toPath string, overwrite bool) (protocol.TransferResult, error)
 	Audit(ctx context.Context, e store.AuditEntry)
 }
@@ -247,13 +249,26 @@ func (t *Tools) briefed(ctx context.Context, c caller, tool, param, ref, token s
 	if t.briefings.Valid(c.laneID, m.ID, m.SkillsHash, token) {
 		return m, nil
 	}
-	reason := "no briefing token was given"
+	reason, changes := "no briefing token was given", ""
 	if strings.TrimSpace(token) != "" {
-		reason = "its briefing token is unknown, or the machine's skills changed since it was issued"
+		reason = "its briefing token is unknown (or older than the versions Lanesh keeps)"
+		// Find the version the token was issued for, so that the agent learns
+		// what changed relative to what it saw; agents without a token (for
+		// example new sessions) get a plain briefing.
+		for _, old := range t.backend.SkillHistory(ctx, c.laneID, m.ID) {
+			if old.Hash != d.Skills.Hash && t.briefings.Valid(c.laneID, m.ID, old.Hash, token) {
+				reason = "the machine's skills changed since your last briefing"
+				changes = renderChanges(diffSkills(old, d.Skills))
+				if changes == "" {
+					changes = "Changes since your last briefing: only which of two same-named skills takes priority changed."
+				}
+				break
+			}
+		}
 	}
 	return Machine{}, &BriefingRequired{
 		Machine: m.Name,
-		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason, tool, param),
+		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason, tool, param, changes),
 	}
 }
 
