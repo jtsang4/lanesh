@@ -3,7 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &docs
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
+    paths-ignore: *docs
 
 permissions:
   contents: read
@@ -13,8 +19,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides which jobs a change needs. Changes to workflows or build tooling
+  # run everything.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      web: ${{ steps.filter.outputs.web }}
+      npm: ${{ steps.filter.outputs.npm }}
+      image: ${{ steps.filter.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            shared: &shared
+              - ".github/workflows/**"
+              - "Makefile"
+            go:
+              - *shared
+              - "**.go"
+              - "go.mod"
+              - "go.sum"
+              - ".golangci.yml"
+              - "internal/server/scripts/**"
+              - "scripts/**"
+            web:
+              - *shared
+              - "web/**"
+            npm:
+              - *shared
+              - "build/npm/**"
+            image:
+              - *shared
+              - "**.go"
+              - "go.mod"
+              - "go.sum"
+              - "web/**"
+              - "build/package/**"
+              - ".goreleaser.yaml"
+
   go-test:
     name: Go test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +85,8 @@ jobs:
 
   service:
     name: Service lifecycle (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +113,8 @@ jobs:
 
   install-script:
     name: Install script (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +134,8 @@ jobs:
 
   go-lint:
     name: Go lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -86,11 +145,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
-          # Build with the project's Go version so newer language versions are supported.
-          install-mode: goinstall
+      - name: Lint workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
   web:
     name: Web UI
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -112,6 +173,8 @@ jobs:
 
   npm-launcher:
     name: npm launcher
+    needs: changes
+    if: needs.changes.outputs.npm == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -123,6 +186,8 @@ jobs:
 
   image:
     name: Container image
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -131,6 +196,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # A separate cache: this job cross-compiles every platform, which
+          # the shared cache saved by other jobs does not contain.
+          cache-dependency-path: |
+            go.sum
+            .goreleaser.yaml
       - uses: pnpm/action-setup@v6
         with:
           package_json_file: web/package.json
@@ -145,6 +215,11 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build
       - uses: docker/setup-buildx-action@v4
+      - name: GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
       - name: Build snapshot images
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -167,13 +242,3 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs lanesh || true
-
-  release-config:
-    name: GoReleaser config
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          version: "~> v2"
-          args: check

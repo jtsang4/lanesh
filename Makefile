@@ -1,9 +1,14 @@
 SHELL := /bin/sh
 
-PNPM    ?= pnpm
+# The pnpm version pinned in web/package.json, run through npx so that no
+# global pnpm (or a working self-switch) is required.
+PNPM    ?= npx -y $(shell node -p "require('./web/package.json').packageManager")
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Pinned to the version CI uses; built with the project's Go toolchain.
+GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
 PKG     := github.com/jtsang4/lanesh/internal/version
 LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Date=$(DATE)
@@ -34,13 +39,24 @@ test: ## Run Go, web and npm launcher tests
 
 .PHONY: lint
 lint: ## Run linters
-	golangci-lint run ./...
+	$(GOLANGCI_LINT) run ./...
 	cd web && $(PNPM) run lint
+
+.PHONY: check
+check: lint test ## Run the checks CI runs on every change (lint and tests)
+
+.PHONY: hooks
+hooks: ## Install git pre-commit hooks (lefthook) that check staged files
+	go run github.com/evilmartians/lefthook/v2@v2.2.2 install
 
 .PHONY: fmt
 fmt: ## Format Go and web sources
-	golangci-lint fmt ./...
+	$(GOLANGCI_LINT) fmt ./...
 	cd web && $(PNPM) run format
+
+.PHONY: dev
+dev: ## Run a local server with three demo machines (scripts/dev.sh)
+	scripts/dev.sh
 
 .PHONY: dev-server
 dev-server: ## Run the server locally on :8080

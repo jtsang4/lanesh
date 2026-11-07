@@ -12,11 +12,18 @@ Thanks for your interest in Lanesh. Issues and pull requests are welcome.
 - **Go**: the version declared in `go.mod`. With `GOTOOLCHAIN=auto` (the default), Go downloads it for you.
 - **Node.js**: 24 or newer.
 - **pnpm**: the version pinned in `web/package.json` (`packageManager`). `corepack enable` sets it up.
-- **golangci-lint** v2, built with a Go version at least as new as the one in `go.mod`:
-  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
 - **GoReleaser** (optional) for `make snapshot`.
 
-Run `make help` to list the available tasks.
+Linters run through `go run` at the version CI uses, so there is nothing else to install.
+
+Run `make help` to list the available tasks. The most useful ones:
+
+| Command | What it does |
+|---|---|
+| `make check` | Lint and tests, as CI runs them |
+| `make hooks` | Install pre-commit hooks that format-check and lint only your staged files |
+| `make dev` | Local server with three demo machines at http://localhost:8080 (admin token `lsa_dev_token`) |
+| `make dev-web` | UI dev server with hot reload, proxying API calls to `make dev` |
 
 ## Project layout
 
@@ -35,7 +42,7 @@ The repository follows [golang-standards/project-layout](https://github.com/gola
 ## Making changes
 
 - Keep pull requests focused. Include tests for behaviour changes.
-- Run `make lint test` before pushing. CI runs the Go tests on Linux, macOS and Windows.
+- Run `make check` before pushing. CI runs the Go tests, the background-service lifecycle and the install scripts on Linux, macOS and Windows; jobs are skipped when a change cannot affect them (for example documentation-only changes).
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`, `chore:`). Release notes are generated from them.
 - The web UI targets a high, restrained visual standard. See the design document's UI section before making UI changes.
 

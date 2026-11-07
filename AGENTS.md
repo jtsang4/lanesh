@@ -23,6 +23,8 @@ make web          # build the UI
 make build        # build ./bin/lanesh
 make test         # go test, svelte-check, npm launcher tests
 make lint         # golangci-lint and web lint
+make check        # lint + test, as CI runs them
+make hooks        # pre-commit hooks for staged files (lefthook)
 scripts/dev.sh    # local server + three demo machines on :8080 (admin token lsa_dev_token)
 scripts/service-test.sh ./bin/lanesh   # background service lifecycle (installs a real per-user service)
 ```

@@ -1,0 +1,28 @@
+# Git hooks for contributors (optional). Install with `make hooks`.
+# They check only staged files, so commits stay fast; CI runs the full suite.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: go format
+      glob: "*.go"
+      run: |
+        files=$(gofmt -l {staged_files})
+        [ -z "$files" ] || { echo "$files"; echo "Not gofmt-formatted; run make fmt"; exit 1; }
+
+    - name: go lint
+      glob: "*.go"
+      run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --new-from-rev=HEAD ./...
+
+    - name: web format and lint
+      root: "web/"
+      glob: "*.{ts,js,svelte,css,json}"
+      run: ./node_modules/.bin/oxfmt --check {staged_files} && ./node_modules/.bin/oxlint --deny-warnings {staged_files}
+
+    - name: npm launcher syntax
+      root: "build/npm/"
+      glob: "*.js"
+      run: node --check {staged_files}
+
+    - name: workflows
+      glob: ".github/workflows/*.yml"
+      run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 {staged_files}
