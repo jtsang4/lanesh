@@ -1,0 +1,18 @@
+# Example deployment. Put Lanesh behind a TLS-terminating reverse proxy
+# (Coolify, Traefik, Caddy, nginx, ...) that allows WebSocket upgrades.
+services:
+  lanesh:
+    image: ghcr.io/jtsang4/lanesh:latest
+    command: ["server"]
+    restart: unless-stopped
+    environment:
+      LANESH_PUBLIC_URL: https://lanesh.example.com
+      # Leave unset to have one generated and printed on first start.
+      LANESH_ADMIN_TOKEN: ${LANESH_ADMIN_TOKEN:-}
+    volumes:
+      - lanesh-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  lanesh-data:

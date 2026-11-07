@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: lanesh
+
+before:
+  hooks:
+    # The UI must be built before Go so that go:embed picks it up.
+    - sh -c 'test -f web/build/app/index.html || (echo "web UI not built; run make web" >&2; exit 1)'
+
+builds:
+  - id: lanesh
+    main: ./cmd/lanesh
+    binary: lanesh
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/jtsang4/lanesh/internal/version.Version={{ .Version }}
+      - -X github.com/jtsang4/lanesh/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/jtsang4/lanesh/internal/version.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  # Archives for manual downloads.
+  - id: archive
+    ids: [lanesh]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+  # Raw binaries, used by the npm launcher, install scripts and self-update.
+  - id: binary
+    ids: [lanesh]
+    formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+dockers_v2:
+  - id: lanesh
+    ids: [lanesh]
+    dockerfile: build/package/Dockerfile
+    images:
+      - ghcr.io/jtsang4/lanesh
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Share skills and shells across your machines through one MCP endpoint"
+      org.opencontainers.image.source: "https://github.com/jtsang4/lanesh"
+      org.opencontainers.image.url: "https://github.com/jtsang4/lanesh"
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+    annotations:
+      "index,manifest:org.opencontainers.image.description": "Share skills and shells across your machines through one MCP endpoint"
+      "index,manifest:org.opencontainers.image.source": "https://github.com/jtsang4/lanesh"
+      "index,manifest:org.opencontainers.image.licenses": MIT
+    sbom: true
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^docs(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^ci(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+
+release:
+  github:
+    owner: jtsang4
+    name: lanesh
+  prerelease: auto
