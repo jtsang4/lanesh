@@ -10,7 +10,7 @@ Lanesh lets an AI agent discover and use global skills and shells across multipl
 
 ## Layout
 
-- `cmd/lanesh`: the only entry point; subcommands select server, daemon or CLI behaviour.
+- `cmd/lanesh`: the only entry point; subcommands select server, daemon or CLI behaviour (`internal/cli`).
 - `internal/`: all application code. Package boundaries follow the design document (§14).
 - `web/`: SvelteKit SPA. `web/embed.go` embeds `web/build/app`; `web/build/.gitkeep` must stay so Go compiles without a UI build.
 - `build/package/Dockerfile`: image built by GoReleaser from prebuilt binaries.
@@ -19,11 +19,17 @@ Lanesh lets an AI agent discover and use global skills and shells across multipl
 ## Commands
 
 ```sh
-make web     # build the UI
-make build   # build ./bin/lanesh
-make test    # go test, svelte-check, npm launcher tests
-make lint    # golangci-lint and web lint
+make web          # build the UI
+make build        # build ./bin/lanesh
+make test         # go test, svelte-check, npm launcher tests
+make lint         # golangci-lint and web lint
+scripts/dev.sh    # local server + three demo machines on :8080 (admin token lsa_dev_token)
+scripts/service-test.sh ./bin/lanesh   # background service lifecycle (installs a real per-user service)
 ```
+
+- `internal/server/e2e_test.go` runs a real server and daemons in-process and drives them with the official MCP SDK client. Extend it when changing MCP tools or the control protocol.
+- Lint for every OS when touching OS-specific code: `GOOS=windows golangci-lint run ./...` (and `linux`, `darwin`).
+- When piping a command into `tail`/`grep`, its exit code is lost; check lint and test results explicitly before committing.
 
 ## Conventions
 
