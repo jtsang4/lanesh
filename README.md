@@ -3,21 +3,17 @@
 **Share skills and shells across your machines through one MCP endpoint.**
 
 [![CI](https://github.com/jtsang4/lanesh/actions/workflows/ci.yml/badge.svg)](https://github.com/jtsang4/lanesh/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jtsang4/lanesh?sort=semver)](https://github.com/jtsang4/lanesh/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> [!WARNING]
-> Lanesh is in early development. The design is settled, but most features are not implemented yet. See [the design document](docs/design.md) and the [roadmap](#status).
+An AI agent can only use the machine it runs on. Your skills are spread across a laptop, a dev box and a GPU server, each with its own tools, credentials and network access. Copying skills around drifts out of sync, and SSH gives an agent a shell but tells it nothing about what each machine can do.
 
-## Why
+Lanesh gives an agent one MCP endpoint that reaches all of your machines. Through it, the agent can:
 
-An AI agent can only use the machine it runs on. Your skills are spread across a laptop, a dev box, and a GPU server, each with its own tools, credentials and network access. Copying skills around drifts out of sync, and SSH gives the agent a shell but tells it nothing about what each machine can do.
-
-Lanesh gives an agent one MCP endpoint that reaches all of your machines:
-
-- **Discover** which machines are online and what global skills each one has installed
-- **Read** a skill's `SKILL.md` and its scripts and references, on demand
+- **Discover** which machines are online and which global skills each one has installed
+- **Read** a skill's `SKILL.md`, scripts and references on demand
 - **Run** commands on a specific machine, including long-running background jobs
-- **Move** files between machines
+- **Move** files and directories between machines
 
 ## How it works
 
@@ -26,42 +22,134 @@ Agent ──HTTP (MCP)──▶ Lanesh server ◀──WebSocket── machine A
                       (self-hosted)  ◀──WebSocket── machine B (lanesh daemon)
 ```
 
-- You self-host a **server** and create one or more **lanes**. A lane is a group of machines that trust each other.
-- Each machine runs the **lanesh daemon** as a background service and joins a lane. The daemon dials out to the server, so machines behind NAT work too.
-- Any agent adds the lane's MCP URL and an access key to its MCP config. It never needs to install anything.
+- You self-host a **server** and create **lanes**. A lane is a group of machines that trust each other.
+- Each machine runs the **lanesh daemon** as a background service and joins one or more lanes. The daemon dials out to the server, so machines behind NAT work too.
+- An agent adds the lane's MCP URL and an **access key** to its MCP configuration. It does not need to install anything.
 
-The daemon reads global skills from `~/.agents/skills` and `~/.claude/skills` (`~/.agents/skills` wins on name conflicts).
+The daemon shares the global skills in `~/.agents/skills` and `~/.claude/skills`. When both contain a skill with the same name, the one in `~/.agents/skills` wins.
 
-## Planned MCP tools
+## Quick start
+
+### 1. Deploy the server
+
+With Docker Compose (or Coolify, using the same image and a persistent volume for `/data`):
+
+```yaml
+services:
+  lanesh:
+    image: ghcr.io/jtsang4/lanesh:latest
+    restart: unless-stopped
+    environment:
+      LANESH_PUBLIC_URL: https://lanesh.example.com
+    volumes:
+      - lanesh-data:/data
+    ports:
+      - "8080:8080"
+volumes:
+  lanesh-data:
+```
+
+Put it behind a reverse proxy that terminates TLS and allows WebSocket upgrades. On first start the server prints a generated **admin token** to its log; it is shown only once. You can set `LANESH_ADMIN_TOKEN` instead.
+
+Prefer a single binary? Download it from [Releases](https://github.com/jtsang4/lanesh/releases) and run `lanesh server --public-url https://lanesh.example.com`.
+
+### 2. Create a lane
+
+Open the server in a browser, sign in with the admin token, create a lane, then create a **join key** (for machines) and an **access key** (for agents). The web UI shows ready-to-paste commands for the next two steps.
+
+From a terminal instead:
+
+```sh
+lanesh admin login https://lanesh.example.com
+lanesh lane create work
+lanesh key create work --kind join --name machines
+lanesh key create work --kind access --name claude-code
+```
+
+### 3. Join your machines
+
+On each machine:
+
+```sh
+# macOS / Linux
+curl -fsSL https://lanesh.example.com/install.sh | sh -s -- join https://lanesh.example.com/lanes/<lane-id> --key <join-key>
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://lanesh.example.com/install.ps1))) join https://lanesh.example.com/lanes/<lane-id> --key <join-key>
+```
+
+Or with Node.js: `npx lanesh join https://lanesh.example.com/lanes/<lane-id> --key <join-key>`.
+
+`lanesh join` installs the binary to `~/.lanesh/bin`, registers the machine and starts a per-user background service: a launchd agent on macOS, a systemd user unit on Linux, or a scheduled task on Windows. The daemon keeps itself on the same version as the server. Add `--no-exec` to share skills without allowing commands or file access.
+
+### 4. Connect an agent
+
+Claude Code:
+
+```sh
+claude mcp add --transport http lanesh https://lanesh.example.com/lanes/<lane-id>/mcp \
+  --header "Authorization: Bearer <access-key>"
+```
+
+Any MCP client that supports Streamable HTTP works. Pass the access key as `Authorization: Bearer <access-key>`, or as `?key=<access-key>` if the client cannot set headers. If the agent's own machine is in the lane, add `?machine=<name>` so that Lanesh can tell the agent which machine is its own.
+
+## MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `list_machines` | Machines in the lane, their status and skill counts |
-| `describe_machine` | A machine's environment, policy and installed skills; required before other tools touch that machine |
+| `list_machines` | Machines in the lane, their status, platform, permissions and skill counts |
+| `describe_machine` | A machine's environment, shell, permissions and installed skills, plus a **briefing token** |
 | `read_skill` | `SKILL.md`, the skill's file tree, or any file inside the skill |
 | `exec` | Run a command; long commands continue as background jobs |
-| `job_read` / `job_write` / `job_kill` / `job_list` | Manage background jobs |
+| `job_read` / `job_write` / `job_kill` / `job_list` | Follow, feed and stop background jobs |
 | `read_file` / `write_file` | Small inline file operations |
-| `transfer` | Stream files or directories between machines |
+| `transfer` | Stream a file or directory from one machine to another |
 
-## Status
+Every tool that touches a machine requires the briefing token from `describe_machine`. This makes the agent look at a machine's environment and skills before using it. If the machine's skills change later, tool results include a notice that tells the agent to describe the machine again.
 
-- [x] Design ([docs/design.md](docs/design.md), in Chinese)
-- [x] Project skeleton, CI and release pipeline
-- [ ] Server core: lanes, credentials, daemon connections
-- [ ] MCP: machines, skills, describe gating
-- [ ] Exec, jobs and file transfer on macOS, Linux and Windows
-- [ ] Background service management and self-update
-- [ ] Web management UI
-- [ ] First release
+## Managing a machine
 
-## Installation
+| Command | Description |
+|---|---|
+| `lanesh status` | Service state and the connection of each lane |
+| `lanesh logs [-f]` | Daemon log |
+| `lanesh doctor` | Diagnose the installation, service, connectivity and environment |
+| `lanesh start` / `stop` / `restart` | Control the background service |
+| `lanesh config set policy.allow_exec false` | Change what this machine allows (`lanesh config --help` lists all keys) |
+| `lanesh update` | Update now (the daemon also follows the server's version automatically) |
+| `lanesh leave <lane>` | Leave a lane; the service is removed when no lanes remain |
 
-There is no release yet. Once released, Lanesh will be available as:
+Commands run as your user, in your login shell's environment, so tools installed through nvm, Homebrew, pipx and similar are on the `PATH`.
 
-- a container image: `ghcr.io/jtsang4/lanesh`
-- an npm package: `npx lanesh`
-- standalone binaries on [GitHub Releases](https://github.com/jtsang4/lanesh/releases)
+## Server configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `LANESH_PUBLIC_URL` | (request host) | Public URL of the server, used in install snippets |
+| `LANESH_ADMIN_TOKEN` | generated | Admin token for the web UI and API |
+| `LANESH_DATA_DIR` | `/data` in the image, `./data` otherwise | SQLite database location |
+| `LANESH_LISTEN` | `:8080` | Listen address |
+| `LANESH_TRANSFER_MAX_BYTES` | unlimited | Maximum size of one transfer |
+| `LANESH_AUDIT_RETENTION_DAYS` | `90` | How long audit records are kept |
+| `LANESH_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+
+## Security
+
+- An access key grants control over every machine in its lane that allows execution. Treat it like an SSH key, give each agent its own, and revoke keys you no longer use.
+- A lane is a trust boundary. Skills from one machine become instructions for agents, so only put machines that fully trust each other in the same lane.
+- The server relays commands, output and files in plaintext and must be self-hosted behind TLS.
+- Each machine decides locally what it allows (`policy.expose_skills`, `policy.allow_exec`); the server cannot override it.
+- Every command, file operation and transfer is recorded in the server's audit log and in `~/.lanesh/logs/audit.log` on the machine.
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## Documentation
+
+- [Design](docs/design.md) (in Chinese): architecture, protocol, MCP tools, deployment
+- [Admin API](docs/api.md)
+- [Releasing](docs/releasing.md) (in Chinese)
 
 ## Development
 
@@ -72,8 +160,8 @@ make web          # build the UI (embedded into the binary)
 make build        # build ./bin/lanesh
 make test         # Go, web and npm launcher tests
 make lint
-make dev-server   # run the server on :8080
-make dev-web      # run the UI dev server with API proxy
+scripts/dev.sh    # local server with demo machines at http://localhost:8080 (admin token lsa_dev_token)
+make dev-web      # UI dev server with API proxy
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.

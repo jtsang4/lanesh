@@ -105,7 +105,12 @@ func (h *harness) startMachine(name string, allowExec bool, skillNames ...string
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	go func() { _ = d.Run(h.ctx) }()
+	// Stop the daemon before its temporary directories are removed
+	// (cleanups run in reverse order of registration).
+	dctx, dcancel := context.WithCancel(h.ctx)
+	done := make(chan struct{})
+	go func() { _ = d.Run(dctx); close(done) }()
+	h.t.Cleanup(func() { dcancel(); <-done })
 	h.waitOnline(name, true)
 	return m
 }

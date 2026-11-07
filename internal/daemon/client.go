@@ -32,6 +32,7 @@ type laneConn struct {
 	cred   string
 	policy protocol.Policy
 
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -48,20 +49,22 @@ type laneConn struct {
 	jobs      map[string]bool
 }
 
-func newLaneConn(d *Daemon, lane LaneConfig, cred string, policy protocol.Policy) *laneConn {
+func newLaneConn(ctx context.Context, d *Daemon, lane LaneConfig, cred string, policy protocol.Policy) *laneConn {
+	ctx, cancel := context.WithCancel(ctx)
 	return &laneConn{
-		d: d, lane: lane, cred: cred, policy: policy, done: make(chan struct{}),
+		d: d, lane: lane, cred: cred, policy: policy, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		since: time.Now(), laneName: lane.LaneName, name: lane.MachineName,
 		inflight: map[string]context.CancelFunc{}, jobs: map[string]bool{},
 	}
 }
 
-func (c *laneConn) stop() {
-	c.mu.Lock()
-	cancel := c.cancel
-	c.mu.Unlock()
-	if cancel != nil {
-		cancel()
+// stop cancels the connection; wait blocks until it has finished.
+func (c *laneConn) stop() { c.cancel() }
+
+func (c *laneConn) wait() {
+	select {
+	case <-c.done:
+	case <-time.After(10 * time.Second):
 	}
 }
 
@@ -89,11 +92,8 @@ func (c *laneConn) setConnected(ok bool, err error) {
 	c.d.writeState()
 }
 
-func (c *laneConn) run(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	c.mu.Lock()
-	c.cancel = cancel
-	c.mu.Unlock()
+func (c *laneConn) run() {
+	ctx := c.ctx
 	defer close(c.done)
 
 	backoff := time.Second

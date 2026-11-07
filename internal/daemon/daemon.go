@@ -141,9 +141,9 @@ func (d *Daemon) reconcile(ctx context.Context) {
 			slog.Warn("no credential for lane; run lanesh join again", "lane", key)
 			continue
 		}
-		c := newLaneConn(d, lane, cred, policy)
+		c := newLaneConn(ctx, d, lane, cred, policy)
 		d.conns[key] = c
-		go c.run(ctx)
+		go c.run()
 	}
 	for key, c := range d.conns {
 		if !want[key] {
@@ -155,12 +155,18 @@ func (d *Daemon) reconcile(ctx context.Context) {
 	d.writeState()
 }
 
+// stopAll stops every lane connection and waits for them to finish.
 func (d *Daemon) stopAll() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	conns := make([]*laneConn, 0, len(d.conns))
 	for key, c := range d.conns {
 		c.stop()
+		conns = append(conns, c)
 		delete(d.conns, key)
+	}
+	d.mu.Unlock()
+	for _, c := range conns {
+		c.wait()
 	}
 }
 
