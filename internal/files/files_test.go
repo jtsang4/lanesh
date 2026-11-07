@@ -70,7 +70,7 @@ func TestPackUnpackDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SHA != sent.SHA || got.Bytes != sent.Bytes || got.Files != 2 || sent.Files != 2 {
+	if got.SHA != sent.SHA || got.Bytes != 6 || sent.Bytes != 6 || got.Files != 2 || sent.Files != 2 {
 		t.Fatalf("sent %+v got %+v", sent, got)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dst, "a", "b", "deep.bin")); !bytes.Equal(b, []byte{0, 1, 2}) {

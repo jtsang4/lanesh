@@ -152,7 +152,8 @@ func (t *Tools) register(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "transfer",
 		Description: "Copy a file or directory from one machine to another (or within one machine), streamed through the server. " +
-			"to_path is the full destination path; it must not exist unless overwrite is true.",
+			"to_path is the full destination path, not its parent: copying the directory ~/out into ~/inbox means to_path ~/inbox/out. " +
+			"It must not exist unless overwrite is true. The result reports the number of files, their total bytes and the stream's sha256.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(true)},
 	}, t.transfer)
 }

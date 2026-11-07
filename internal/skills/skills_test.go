@@ -59,6 +59,16 @@ func TestScanDedupesWithAgentsPriority(t *testing.T) {
 	}
 }
 
+func TestScanToleratesInvalidYAMLFrontmatter(t *testing.T) {
+	home := t.TempDir()
+	srcs := DefaultSources(home)
+	writeSkill(t, srcs[0].Dir, "colon", "---\nname: colon\ndescription: Use when: the user asks for X\n  and also Y\nmetadata: {broken\n---", nil)
+	idx := Scan(srcs)
+	if len(idx.Skills) != 1 || idx.Skills[0].Description != "Use when: the user asks for X and also Y" {
+		t.Fatalf("skills = %+v", idx.Skills)
+	}
+}
+
 func TestScanFollowsSymlinksWithoutShadowing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need privileges on Windows")

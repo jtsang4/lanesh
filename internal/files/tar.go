@@ -18,8 +18,8 @@ import (
 // Stats summarizes a packed or unpacked stream.
 type Stats struct {
 	Files int
-	Bytes int64 // bytes of the tar stream
-	SHA   string
+	Bytes int64  // total size of the regular files' contents
+	SHA   string // SHA-256 of the transfer stream, compared end to end
 }
 
 type countingHash struct {
@@ -46,6 +46,7 @@ func Pack(w io.Writer, src string) (Stats, error) {
 	ch := &countingHash{h: sha256.New()}
 	tw := tar.NewWriter(io.MultiWriter(w, ch))
 	files := 0
+	var content int64
 
 	add := func(p, name string, fi fs.FileInfo) error {
 		hdr, err := tar.FileInfoHeader(fi, "")
@@ -68,10 +69,12 @@ func Pack(w io.Writer, src string) (Stats, error) {
 			return err
 		}
 		defer f.Close()
-		if _, err := io.Copy(tw, f); err != nil {
+		n, err := io.Copy(tw, f)
+		if err != nil {
 			return err
 		}
 		files++
+		content += n
 		return nil
 	}
 
@@ -105,7 +108,7 @@ func Pack(w io.Writer, src string) (Stats, error) {
 	if err := tw.Close(); err != nil {
 		return Stats{}, err
 	}
-	return Stats{Files: files, Bytes: ch.n, SHA: hex.EncodeToString(ch.h.Sum(nil))}, nil
+	return Stats{Files: files, Bytes: content, SHA: hex.EncodeToString(ch.h.Sum(nil))}, nil
 }
 
 // Unpack reads a stream produced by Pack and materializes it at dst. Content
@@ -129,6 +132,7 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 	ch := &countingHash{h: sha256.New()}
 	tr := tar.NewReader(io.TeeReader(r, ch))
 	files := 0
+	var content int64
 	sawRoot := false
 	for {
 		hdr, err := tr.Next()
@@ -164,10 +168,12 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 			if err != nil {
 				return Stats{}, err
 			}
-			if _, err := io.Copy(f, tr); err != nil { //nolint:gosec // Size is bounded by the server's transfer limit.
+			n, err := io.Copy(f, tr) //nolint:gosec // Size is bounded by the server's transfer limit.
+			if err != nil {
 				_ = f.Close()
 				return Stats{}, err
 			}
+			content += n
 			if err := f.Close(); err != nil {
 				return Stats{}, err
 			}
@@ -184,5 +190,5 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 	if err := replace(root, dst); err != nil {
 		return Stats{}, err
 	}
-	return Stats{Files: files, Bytes: ch.n, SHA: hex.EncodeToString(ch.h.Sum(nil))}, nil
+	return Stats{Files: files, Bytes: content, SHA: hex.EncodeToString(ch.h.Sum(nil))}, nil
 }

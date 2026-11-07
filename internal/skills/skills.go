@@ -149,11 +149,47 @@ func readMeta(path string) (meta, error) {
 	}
 	var m meta
 	if err := yaml.Unmarshal(buf.Bytes(), &m); err != nil {
-		return meta{}, nil
+		// Frontmatter is often hand-written YAML that is not strictly valid,
+		// e.g. an unquoted description containing ": ". Fall back to reading
+		// the top-level keys line by line.
+		m = lenientMeta(buf.String())
 	}
 	m.Name = strings.TrimSpace(m.Name)
 	m.Description = strings.Join(strings.Fields(m.Description), " ")
 	return m, nil
+}
+
+// lenientMeta extracts top-level name and description from frontmatter that
+// failed to parse as YAML. Indented lines continue the previous value.
+func lenientMeta(fm string) meta {
+	var m meta
+	var cur *string
+	for _, line := range strings.Split(fm, "\n") {
+		if line != "" && (line[0] == ' ' || line[0] == '\t') {
+			if cur != nil {
+				*cur += " " + strings.TrimSpace(line)
+			}
+			continue
+		}
+		cur = nil
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "|" || value == ">" || value == "|-" || value == ">-" {
+			value = ""
+		}
+		value = strings.Trim(value, `"'`)
+		switch strings.TrimSpace(key) {
+		case "name":
+			m.Name, cur = value, &m.Name
+		case "description":
+			m.Description, cur = value, &m.Description
+		}
+	}
+	m.Description = strings.Trim(strings.TrimSpace(m.Description), `"'`)
+	return m
 }
 
 // hashDir hashes relative paths and contents of the files in dir.

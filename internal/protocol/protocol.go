@@ -357,6 +357,7 @@ type TransferParams struct {
 }
 
 // TransferResult answers transfer methods once the stream is complete.
+// Bytes is the total size of the transferred files; SHA256 covers the stream.
 type TransferResult struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
