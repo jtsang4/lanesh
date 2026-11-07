@@ -137,15 +137,20 @@ func (launchd) Status() (Status, error) {
 		st.Detail = "not loaded"
 		return st, nil
 	}
+	st.Running, st.PID, st.Detail = parseLaunchctlPrint(out)
+	return st, nil
+}
+
+// parseLaunchctlPrint reads the service's own state and pid, which are
+// indented by exactly one tab; nested sections repeat these keys.
+func parseLaunchctlPrint(out string) (running bool, pid int, state string) {
 	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "state = "); ok {
-			st.Running = v == "running"
-			st.Detail = v
+		if v, ok := strings.CutPrefix(line, "\tstate = "); ok && state == "" {
+			state = strings.TrimSpace(v)
 		}
-		if v, ok := strings.CutPrefix(line, "pid = "); ok {
-			st.PID, _ = strconv.Atoi(v)
+		if v, ok := strings.CutPrefix(line, "\tpid = "); ok && pid == 0 {
+			pid, _ = strconv.Atoi(strings.TrimSpace(v))
 		}
 	}
-	return st, nil
+	return state == "running", pid, state
 }
