@@ -12,7 +12,7 @@ import (
 )
 
 func TestExpand(t *testing.T) {
-	home := filepath.FromSlash("/home/u")
+	home := t.TempDir()
 	for in, want := range map[string]string{
 		"~":           home,
 		"~/a/b":       filepath.Join(home, "a", "b"),

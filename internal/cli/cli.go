@@ -13,6 +13,8 @@ import (
 	"github.com/jtsang4/lanesh/internal/version"
 )
 
+var homeFlag string
+
 // exitError carries a specific process exit code.
 type exitError struct{ code int }
 
@@ -41,7 +43,13 @@ discover the skills installed on each machine, run commands and move files
 between them through one MCP endpoint.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRun: func(*cobra.Command, []string) {
+			if homeFlag != "" {
+				_ = os.Setenv("LANESH_HOME", homeFlag)
+			}
+		},
 	}
+	root.PersistentFlags().StringVar(&homeFlag, "home", "", "Lanesh home directory (default $LANESH_HOME or ~/.lanesh)")
 	root.AddGroup(
 		&cobra.Group{ID: "machine", Title: "Machine commands:"},
 		&cobra.Group{ID: "admin", Title: "Administration:"},

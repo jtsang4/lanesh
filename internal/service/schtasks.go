@@ -94,10 +94,13 @@ func (schtasks) Install(c Config) error {
 		return err
 	}
 	// conhost --headless runs the console program without showing a window.
-	command, args := c.Binary, `daemon --supervise`
+	// Task Scheduler cannot set environment variables, so the home directory
+	// is passed as a flag.
+	daemonArgs := `daemon --supervise --home "` + c.Home + `"`
+	command, args := c.Binary, daemonArgs
 	conhost := filepath.Join(os.Getenv("SystemRoot"), "System32", "conhost.exe")
 	if _, err := os.Stat(conhost); err == nil { //nolint:gosec // %SystemRoot% is a trusted system path.
-		command, args = conhost, `--headless "`+c.Binary+`" daemon --supervise`
+		command, args = conhost, `--headless "`+c.Binary+`" `+daemonArgs
 	}
 	var buf bytes.Buffer
 	if err := taskTemplate.Execute(&buf, map[string]string{

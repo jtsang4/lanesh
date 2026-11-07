@@ -268,6 +268,17 @@ func TestEndToEnd(t *testing.T) {
 	if bg["status"] != "running" {
 		t.Fatalf("background exec = %v", bg)
 	}
+	// Wait for the first line so that the shell has really started.
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		r := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bg["job_id"]})
+		if strings.Contains(r["data"].(string), "started") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background job produced no output: %v", r)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	jobs := mustCall(t, s, "job_list", map[string]any{"machine": "alpha"})
 	if len(jobs["jobs"].([]any)) < 2 {
 		t.Fatalf("job_list = %v", jobs)

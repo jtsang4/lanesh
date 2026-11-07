@@ -62,7 +62,7 @@ v1 不包含（见 §16 路线图）：
 | **Join key** | Lane 级凭证，用于让新机器加入 Lane |
 | **Machine credential** | 机器加入成功后由 Server 签发的专属凭证，守护进程之后用它连接 |
 | **Access key** | Lane 级凭证，Agent 用它调用该 Lane 的 MCP 端点 |
-| **MCP session** | 一次 MCP 连接的会话，由 `Mcp-Session-Id` 标识 |
+| **Briefing** | `describe_machine` 返回的简报令牌，其他操作该机器的工具都需要它 |
 
 ## 3. 架构
 
@@ -193,7 +193,10 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 - `background: true` 时立即返回 `job_id`。
 - 输出写入每个任务独立的环形缓冲（stdout 和 stderr 分开，默认上限各 16MB），超出部分丢弃最早的内容并标记。任务结束后保留一段时间（默认 1 小时）供读取。
 - 返回给 Agent 的输出有内联上限（默认约 30k 字符，保留头部和尾部），完整内容可以通过 `job_read` 分段读取。
-- 守护进程重启时，所有正在运行的任务都会被终止，并在下次查询时报告 `lost`。
+- 任务记录发起它的 access key（`owner`）。`job_list` 默认只列出当前 access key 发起的任务。
+- 任务按 Lane 隔离：一个 Lane 发起的任务，只能在同一个 Lane 里读取、写入和终止。
+- 前台执行（未设置 `background`）在写完可选的 `stdin` 后立即关闭标准输入，避免命令等待输入而挂起；`background: true` 时保持标准输入打开，供 `job_write` 使用。
+- 守护进程重启时，所有正在运行的任务都会被终止。
 
 **PTY 预留**
 
@@ -286,7 +289,7 @@ Server ──transfer.receive(ticket)─▶ B ◀─GET /transfers/{id}/download
 5. 目录传输时打成 tar 流（Go `archive/tar`），保留相对路径和 Unix 权限位；在 Windows 上对权限位做近似处理。
 6. 目标机器先写入临时路径，完成并校验后再原子移动到目标路径。`overwrite` 默认为 `false`。
 7. 返回传输字节数、文件数、耗时和 sha256。
-8. 源和目标可以是同一台机器，此时直接在本地复制。
+8. 源和目标可以是同一台机器，同样经由 Server 中转。
 
 单次传输大小上限可通过 `LANESH_TRANSFER_MAX_BYTES` 配置。
 
@@ -309,13 +312,14 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 ### 8.2 Server instructions
 
-MCP `initialize` 返回的 `instructions` 字段说明使用流程（以下为草稿）：
+MCP `initialize` 返回的 `instructions` 字段说明使用流程（定义在 `internal/mcp/mcp.go`）：
 
-> Lanesh gives you access to multiple machines in a lane. Each machine has its own globally installed skills and its own shell.
-> 1. Call `list_machines` to see which machines are available.
-> 2. Before using any machine, call `describe_machine` for it. This returns its environment and its skills. Other machine tools will refuse to run until you have done so.
-> 3. Skills live on the machine where they are installed. When a skill says to run a script, run it on that same machine with `exec`, using `skill` to set the working directory to the skill directory.
-> 4. Files are not shared between machines. Use `transfer` to move files.
+> Lanesh gives you access to several machines in one lane. Each machine has its own globally installed agent skills, its own shell and its own files.
+> 1. Call list_machines to see which machines exist and which are online.
+> 2. Before using a machine, call describe_machine for it. It returns the machine's environment, what it allows, its installed skills, and a briefing token. Every other tool that touches that machine requires the briefing token, so describe a machine before working with it.
+> 3. Skills live on the machine where they are installed. Read them with read_skill. When a skill tells you to run a script, run it on that same machine with exec, passing skill so that the working directory is the skill directory. Use the machine's shell syntax (see describe_machine).
+> 4. Files are not shared between machines. Use transfer to copy files or directories from one machine to another; use read_file and write_file only for small files.
+> 5. Long-running commands keep running in the background after exec returns; follow them with job_read and stop them with job_kill.
 
 ### 8.3 工具
 
@@ -334,52 +338,51 @@ MCP `initialize` 返回的 `instructions` 字段说明使用流程（以下为�
 - skill 列表：`name`、`description`、`source`（`agents` 或 `claude`）、`path`（绝对路径）、`hash`
 - `shadowed`：因同名被覆盖的 skill（名称和来源）
 
-调用后，当前 MCP 会话即被标记为“已了解该机器”（见 §8.4）。
+同时返回一个简报令牌 `briefing`，其他操作这台机器的工具都需要它（见 §8.4）。
 
-**`read_skill(machine, skill, path?, offset?, limit?)`**
+**`read_skill(machine, briefing, skill, path?, offset?, limit?)`**
 
 - 不传 `path` 时，返回 `SKILL.md` 内容、skill 目录的绝对路径，以及目录文件树（含文件大小）。
 - 传 `path`（相对 skill 目录）时，读取对应文件；只允许访问 skill 目录内的路径，拒绝路径穿越。
 - 大文件支持 `offset` / `limit` 分段读取；二进制文件以 base64 返回。
 - 只依赖 `expose_skills`，不依赖 `allow_exec`。
 
-**`exec(machine, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?, pty?)`**
+**`exec(machine, briefing, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?, pty?)`**
 
 - `skill`：把工作目录设为该 skill 的目录；与 `cwd` 同时出现时，`cwd` 视为相对 skill 目录的路径。
 - 返回：`job_id`、`status`（`exited` / `running`）、`exit_code`、`stdout`、`stderr`、截断标记、耗时。
 - `pty` 在 v1 中保留，传 `true` 时返回 `unsupported`。
 
-**`job_read(job_id, stream?, offset?, limit?)`**、**`job_write(job_id, data, close_stdin?)`**、**`job_kill(job_id, signal?)`**、**`job_list(machine?)`**
+**`job_read(machine, job_id, stream?, offset?, limit?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?)`**
 
-- 分别用于分段读取输出、写入 stdin、终止任务、列出任务。
-- `job_list` 默认只列出当前 MCP 会话创建的任务。
+- 分别用于分段读取输出、写入 stdin、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`。
+- `job_list` 默认只列出当前 access key 发起的任务，`all: true` 列出该 Lane 在这台机器上的全部任务。
 
-**`read_file(machine, path, offset?, limit?, encoding?)`**、**`write_file(machine, path, content, encoding?, overwrite?, create_dirs?, mode?)`**
+**`read_file(machine, briefing, path, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**
 
 - 内联文件读写，超过内联上限时提示改用 `transfer`。
 
-**`transfer(from_machine, from_path, to_machine, to_path, overwrite?)`**
+**`transfer(from_machine, from_briefing, from_path, to_machine, to_briefing, to_path, overwrite?)`**
 
 - 在两台机器之间传输文件或目录，见 §7。
 
-### 8.4 会话检查（describe gating）
+### 8.4 简报令牌（describe gating）
 
 目的：确保 Agent 在操作一台机器之前，已经了解它的环境和已安装的 skill。
 
-- Streamable HTTP 中，Server 在 `initialize` 响应里分配 `Mcp-Session-Id`，客户端之后的每个请求都携带它。每个 Agent 会话各自建立 MCP 连接，因此同一台机器上的多个 Agent 会话拥有不同的 session ID，互不影响。
-- Server 在内存中为每个 session 记录已经调用过 `describe_machine` 的机器集合。session 闲置 24 小时后清理。
-- 受检查的工具：`read_skill`、`exec`、`read_file`、`write_file`、`transfer`（来源和目标机器都要检查）。未通过时返回错误：
+最初的方案是按 MCP 会话（`Mcp-Session-Id`）记录哪些机器已经 describe 过。但 MCP 新版协议（2026-07-28，SEP-2567 / SEP-2575）走向无会话：请求不再携带会话 ID，每个请求自带客户端信息。按会话检查在新客户端上会失效，所以改为令牌方案，对新旧协议都有效：
 
-  > `machine "build-box" has not been described in this session. Call describe_machine("build-box") first.`
+- `describe_machine` 返回 `briefing`，形如 `brf_…`。它是对 `(lane, machine, 签发时间, skill 索引摘要)` 的 HMAC 签名，密钥保存在 Server 的 SQLite 中。Server 不需要保存会话状态，重启后令牌依然有效。
+- `read_skill`、`exec`、`read_file`、`write_file` 必须带上对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。缺少或不匹配时返回错误：
 
-- `job_*` 操作的是已经存在的任务，不受检查。
-- 如果某台机器的 skill 索引在 describe 之后发生变化，下一次针对该机器的工具调用会在结果中附带提示“该机器的 skill 已更新”，但不强制重新 describe。
+  > `machine "build-box" has not been described in this conversation: call describe_machine("build-box") first and pass its briefing token`
 
-已知边界：
+- 令牌绑定 Lane 和机器，一台机器的令牌不能用于另一台机器。
+- Agent 只有真正调用过 `describe_machine` 才能拿到令牌；每个对话的上下文彼此隔离，无法拿到别的对话的令牌，所以检查天然是按对话生效的。子 Agent 如果没有从主 Agent 拿到令牌，也需要自己 describe。
+- 令牌里带有签发时的 skill 索引摘要。如果之后这台机器的 skill 发生变化，工具照常执行，但结果里会附带 `notice`，提示重新调用 `describe_machine`。
+- `job_*` 操作的是已经存在的任务，不需要令牌。
 
-- 客户端重连或 Server 重启后，session 失效，Agent 需要重新 describe。代价仅为多一次调用。
-- 子 Agent 与主 Agent 共用同一个 MCP 连接时（例如 Claude Code），主 Agent 已 describe 过的机器对子 Agent 也会放行。这在协议层面无法区分。
-- 上下文被压缩后，session 仍然有效，但 Agent 可能已经忘记简报内容。
+已知边界：上下文被压缩后，Agent 可能还保留着令牌，但已经忘了简报内容。这在协议层面无法检测。
 
 ## 9. Server
 
@@ -390,6 +393,7 @@ MCP `initialize` 返回的 `instructions` 字段说明使用流程（以下为�
 | `GET/POST/DELETE /lanes/{lane}/mcp` | access key | MCP 端点 |
 | `POST /lanes/{lane}/join` | join key | 机器加入 |
 | `GET /lanes/{lane}/connect` | machine credential | 守护进程 WebSocket |
+| `DELETE /lanes/{lane}/membership` | machine credential | 机器主动离开 Lane（`lanesh leave`） |
 | `POST /transfers/{id}/upload`、`GET /transfers/{id}/download` | 一次性 ticket | 文件传输数据流 |
 | `/api/v1/*` | admin token 或会话 cookie | 管理 API |
 | `GET /install.sh`、`GET /install.ps1` | 无 | 安装脚本（从 GitHub Releases 下载与 Server 相同版本的二进制） |
@@ -495,21 +499,31 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 |---|---|---|
 | macOS | launchd LaunchAgent（`~/Library/LaunchAgents`） | 登录后自动启动，崩溃后自动重启 |
 | Linux | `systemd --user` | 无桌面的服务器需要执行一次 `loginctl enable-linger <user>`（需要 sudo），否则用户退出登录后服务会停止；`lanesh doctor` 会检测并提示 |
-| Windows | 用户登录时触发的计划任务 | 不使用 Windows Service：Service 默认以 SYSTEM 运行，home 目录和环境都不对 |
+| Windows | 用户登录时触发的计划任务（Task Scheduler） | 不使用 Windows Service：Service 默认以 SYSTEM 运行，home 目录和环境都不对 |
 
 必须以当前用户身份运行，否则无法读取该用户的 skill 目录，也拿不到用户的环境。
 
-服务启动的命令是 `~/.lanesh/bin/lanesh daemon`。
+服务启动的命令是 `~/.lanesh/bin/lanesh daemon`，`LANESH_HOME` 通过服务配置传入。macOS 用 launchd 的 `KeepAlive`，Linux 用 systemd 的 `Restart=always`，进程退出后都会被自动重新拉起。
+
+Windows 有两处特殊处理：
+
+- **不弹控制台窗口**：用户登录时运行控制台程序会出现一个黑窗口，所以计划任务通过 `conhost.exe --headless` 启动 lanesh。
+- **退出后重新拉起**：计划任务的"失败时重新启动"只在任务启动失败时生效，不会在进程退出后重启。所以计划任务运行的是 `lanesh daemon --supervise`，它作为守护父进程启动真正的 `lanesh daemon`，子进程退出后按退避策略重新拉起。子进程放在带 `KILL_ON_JOB_CLOSE` 的 Job Object 中，父进程结束时子进程会一起结束。`lanesh stop` 会结束计划任务，并终止记录在 `supervisor.pid` 中的父进程。
+
+守护进程用锁文件 `~/.lanesh/daemon.lock` 保证同一时间只运行一个实例，并把连接状态写入 `~/.lanesh/state.json`，供 `lanesh status` 和 `lanesh doctor` 读取。
+
+守护进程每隔几秒重新读取一次配置文件。`lanesh join`、`lanesh leave`、`lanesh config set` 修改配置后无需重启服务：新增的 Lane 会自动连接，移除的 Lane 会自动断开，策略或机器名变化会触发重新连接。
 
 ### 11.4 自动升级
 
-- 守护进程在每次握手（`welcome`）时获得 Server 版本，此外每 6 小时检查一次。
+- 守护进程在每次握手（`welcome`）时获得 Server 版本。Server 升级重启后，所有守护进程都会重连，从而拿到新版本号。
 - 目标版本 = 所有已连接 Server 中最高的正式版本（不含预发布或开发版本）。只升级，不自动降级。
 - 目标版本高于当前版本时：
   1. 从 `https://github.com/jtsang4/lanesh/releases/download/v<version>/` 下载对应平台的独立二进制 `lanesh_<version>_<os>_<arch>[.exe]` 和 `checksums.txt`（直接下载链接，不走 GitHub API，没有限流问题）
   2. 校验 sha256
   3. 原子替换 `~/.lanesh/bin/lanesh`。Windows 上不能覆盖正在运行的 exe，所以先把当前文件改名为 `.old`，再放入新文件，下次启动时删除 `.old`
-  4. 退出进程，由服务管理器重新拉起
+  4. 以退出码 75 退出进程，由服务管理器（Windows 上是守护父进程）重新拉起
+- 只有当守护进程运行的就是受管二进制（`~/.lanesh/bin/lanesh`）时才会自动升级；从开发目录直接运行的守护进程不会替换自己。
 - 升级来源可以通过 `[update] source` 配置（便于 fork 或镜像），也可以用 `[update] auto = false` 关闭自动升级。
 - `lanesh update` 手动触发，`lanesh update --version <v>` 安装指定版本（允许降级）。
 - 镜像中不需要包含客户端二进制。
@@ -519,18 +533,19 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 | 命令 | 说明 |
 |---|---|
 | `lanesh server` | 运行 Server |
-| `lanesh join <lane-url> --key <join-key> [--name] [--no-exec]` | 加入 Lane，必要时安装后台服务 |
-| `lanesh leave <lane>` | 离开 Lane；没有剩余 Lane 时询问是否卸载服务 |
-| `lanesh status` | 服务状态、已加入的 Lane、各连接状态、版本 |
+| `lanesh join <lane-url> --key <join-key> [--name] [--no-exec] [--no-service]` | 加入 Lane，把当前二进制复制到受管目录，安装并启动后台服务 |
+| `lanesh leave <lane> [--keep-service]` | 离开 Lane 并通知 Server；没有剩余 Lane 时卸载服务 |
+| `lanesh status [--json]` | 服务状态、已加入的 Lane、各连接状态、版本 |
 | `lanesh logs [-f]` | 查看守护进程日志 |
 | `lanesh start` / `stop` / `restart` | 控制后台服务 |
-| `lanesh update [--version]` | 手动升级 |
+| `lanesh update [--version] [--check]` | 手动升级到 Server 的版本（或最新发布版本） |
 | `lanesh doctor [--refresh-env]` | 诊断 PATH、服务、linger、连通性、版本，刷新执行环境 |
-| `lanesh config ...` | 查看和修改本地配置与策略 |
-| `lanesh admin login <server>` | 保存管理员凭证，供下列命令使用 |
-| `lanesh lane list` / `create` / `delete` | Lane 管理（调用管理 API） |
-| `lanesh key create` / `list` / `revoke` | 凭证管理 |
-| `lanesh daemon` | 守护进程本体，由后台服务调用 |
+| `lanesh config show` / `set <key> <value>` / `unset <key>` | 查看和修改本地配置与策略 |
+| `lanesh admin login <server>` / `logout` | 保存或删除管理员凭证，供下列命令使用 |
+| `lanesh lane list` / `create` / `rename` / `delete` | Lane 管理（调用管理 API） |
+| `lanesh key list` / `create` / `revoke` | 凭证管理 |
+| `lanesh machine list` / `remove` | 查看或移除 Lane 中的机器 |
+| `lanesh daemon [--supervise]` | 守护进程本体，由后台服务调用 |
 | `lanesh healthcheck` | 请求本地 `/healthz`，供容器健康检查使用 |
 
 ## 12. 部署
@@ -590,10 +605,10 @@ cmd/lanesh/                # 唯一入口，按子命令分发
 internal/
   cli/                     # 子命令定义
   server/                  # HTTP 路由、Lane 与连接管理、管理 API
-  mcp/                     # MCP 工具实现与会话检查
+  mcp/                     # MCP 工具实现与简报令牌检查
   daemon/                  # 守护进程：连接、请求分发
   skills/                  # skill 扫描、去重、监听、哈希
-  exec/                    # Runner 接口、管道实现、任务管理、进程树控制
+  runner/                  # 任务管理、环形输出缓冲、shell 选择、进程树控制
   files/                   # 文件读写与传输
   protocol/                # 控制协议消息类型与版本
   store/                   # SQLite 访问与迁移
@@ -601,20 +616,21 @@ internal/
   service/                 # launchd / systemd --user / Windows 计划任务
   update/                  # 自动升级
   version/                 # 构建信息
+internal/server/scripts/   # install.sh、install.ps1 模板（由 Server 渲染）
 web/                       # SvelteKit 前端与 embed.go
-api/                       # 管理 API 定义（OpenAPI）
 build/
   package/Dockerfile
   npm/                     # npm 启动器包
 deployments/               # docker-compose 示例
-scripts/                   # install.sh、install.ps1 模板等
-docs/
-test/                      # 端到端测试
+scripts/                   # dev.sh（本地演示环境）、service-test.sh（服务生命周期测试）
+docs/                      # 设计、管理 API、发布流程
 .agents/skills/            # 项目级 skill
 .claude/skills/            # 指向 .agents/skills 的符号链接
 ```
 
-候选依赖（实现时最终确定）：MCP 官方 Go SDK、`github.com/coder/websocket`、纯 Go 的 SQLite 驱动（`modernc.org/sqlite`）、TOML 解析库、CLI 框架。
+主要依赖：MCP 官方 Go SDK（`github.com/modelcontextprotocol/go-sdk`）、`github.com/coder/websocket`、纯 Go 的 SQLite 驱动（`modernc.org/sqlite`）、`github.com/pelletier/go-toml/v2`、`github.com/fsnotify/fsnotify`、`github.com/spf13/cobra`、`golang.org/x/sys`、`golang.org/x/term`。
+
+端到端测试位于 `internal/server/e2e_test.go`：在进程内启动 Server 和多个守护进程，用官方 MCP SDK 客户端走完整链路。
 
 ## 15. 安全
 
@@ -641,7 +657,7 @@ test/                      # 端到端测试
 
 1. **骨架**：项目结构、CLI 框架、构建与 CI
 2. **核心通路**：Server（Lane、凭证、加入、WebSocket 连接）+ 守护进程（握手、心跳、重连）+ SQLite
-3. **MCP 基础**：`list_machines`、`describe_machine`、`read_skill`，会话检查
+3. **MCP 基础**：`list_machines`、`describe_machine`、`read_skill`，简报令牌检查
 4. **执行与文件**：`exec` 与任务管理、`read_file` / `write_file`、`transfer`，三平台适配
 5. **运维体验**：后台服务安装与管理、`doctor`、自动升级、npm 启动器、安装脚本
 6. **Web UI**：全部管理功能，经过品质自查迭代
@@ -660,6 +676,5 @@ test/                      # 端到端测试
 
 - Server 只支持单实例运行。
 - 只消费、未运行守护进程的机器不能作为文件传输的目标。
-- 会话检查无法区分共用同一 MCP 连接的主 Agent 和子 Agent。
 - 守护进程重启会终止所有正在运行的任务。
 - 只有正式发布的版本才会触发客户端自动升级；Server 运行开发版本时，客户端不会自动升级。
