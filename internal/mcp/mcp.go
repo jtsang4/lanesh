@@ -121,7 +121,7 @@ func (t *Tools) register(s *mcp.Server) {
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)},
 	}, t.exec)
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "job_read",
+		Name: "job_read",
 		Description: "Read a job's stdout or stderr starting at offset. Use next_offset for the following call; eof is true once the job finished and everything was read. " +
 			"Set wait_ms to wait for new output instead of polling.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
