@@ -76,6 +76,53 @@ jobs:
       - run: node --test
         working-directory: build/npm
 
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build web UI
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - uses: docker/setup-buildx-action@v4
+      - name: Build snapshot images
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=sbom
+      - name: Smoke test image
+        run: |
+          image=ghcr.io/jtsang4/lanesh:latest-amd64
+          docker run -d --name lanesh -p 8080:8080 -v lanesh-data:/data "$image"
+          for _ in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' lanesh)
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' lanesh | grep -qx healthy
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/ | grep -qi '<!doctype html>'
+          owner=$(docker run --rm -v lanesh-data:/data busybox stat -c '%u' /data)
+          test "$owner" = 65532 || { echo "/data is owned by uid $owner, want 65532"; exit 1; }
+      - name: Container logs
+        if: failure()
+        run: docker logs lanesh || true
+
   release-config:
     name: GoReleaser config
     runs-on: ubuntu-latest

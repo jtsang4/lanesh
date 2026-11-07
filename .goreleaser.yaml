@@ -69,10 +69,15 @@ dockers_v2:
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"
+    # Index annotations only exist for multi-platform pushes; snapshot builds
+    # load one image per platform, so they are left empty (and thus skipped).
     annotations:
-      "index,manifest:org.opencontainers.image.description": "Share skills and shells across your machines through one MCP endpoint"
-      "index,manifest:org.opencontainers.image.source": "https://github.com/jtsang4/lanesh"
-      "index,manifest:org.opencontainers.image.licenses": MIT
+      "manifest:org.opencontainers.image.description": "Share skills and shells across your machines through one MCP endpoint"
+      "manifest:org.opencontainers.image.source": "https://github.com/jtsang4/lanesh"
+      "manifest:org.opencontainers.image.licenses": MIT
+      "index:org.opencontainers.image.description": "{{ if not .IsSnapshot }}Share skills and shells across your machines through one MCP endpoint{{ end }}"
+      "index:org.opencontainers.image.source": "{{ if not .IsSnapshot }}https://github.com/jtsang4/lanesh{{ end }}"
+      "index:org.opencontainers.image.licenses": "{{ if not .IsSnapshot }}MIT{{ end }}"
     sbom: true
 
 changelog:
