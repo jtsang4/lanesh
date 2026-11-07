@@ -1,0 +1,42 @@
+{
+  "name": "lanesh",
+  "version": "0.0.0-development",
+  "description": "Share skills and shells across your machines through one MCP endpoint.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "skills",
+    "remote-execution",
+    "cli"
+  ],
+  "homepage": "https://github.com/jtsang4/lanesh#readme",
+  "bugs": {
+    "url": "https://github.com/jtsang4/lanesh/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jtsang4/lanesh.git",
+    "directory": "build/npm"
+  },
+  "license": "MIT",
+  "author": "jtsang4",
+  "type": "module",
+  "bin": {
+    "lanesh": "bin/lanesh.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
