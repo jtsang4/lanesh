@@ -1,0 +1,23 @@
+# Build output
+/dist/
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local data and secrets
+/data/
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
