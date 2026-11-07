@@ -38,3 +38,5 @@ func (g *procGroup) signal(name string) error {
 func (g *procGroup) kill() error { return syscall.Kill(-g.pid, syscall.SIGKILL) }
 
 func (g *procGroup) close() {}
+
+func setCommandLine(*exec.Cmd, Shell, string) {}

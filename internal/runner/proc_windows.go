@@ -56,3 +56,13 @@ func (g *procGroup) signal(string) error { return g.kill() }
 func (g *procGroup) kill() error { return windows.TerminateJobObject(g.job, 1) }
 
 func (g *procGroup) close() { _ = windows.CloseHandle(g.job) }
+
+// setCommandLine builds cmd.exe's command line by hand: cmd.exe does not
+// understand the backslash escaping Go applies to arguments, so commands with
+// double quotes would otherwise be mangled.
+func setCommandLine(cmd *exec.Cmd, sh Shell, command string) {
+	if sh.Name != "cmd" {
+		return
+	}
+	cmd.SysProcAttr.CmdLine = `"` + sh.Path + `" /d /s /c "chcp 65001>nul & ` + command + `"`
+}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode/utf16"
+
+	"golang.org/x/sys/windows"
 )
 
 const taskName = "Lanesh Daemon"
@@ -188,19 +190,31 @@ func readPID(path string) (int, bool) {
 	return pid, err == nil && pid > 0
 }
 
-// stopProcesses terminates the supervisor (whose job object then ends the daemon).
+// stopProcesses terminates the supervisor (whose job object then ends the
+// daemon). The PID file may be stale after a reboot, so the process is only
+// terminated if its image is a lanesh executable.
 func stopProcesses(home string) error {
-	pid, ok := readPID(filepath.Join(home, supervisorPIDFile))
+	pidFile := filepath.Join(home, supervisorPIDFile)
+	pid, ok := readPID(pidFile)
 	if !ok {
 		return nil
 	}
-	p, err := os.FindProcess(pid)
+	defer os.Remove(pidFile)                                                                                               //nolint:errcheck
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE, false, uint32(pid)) //nolint:gosec // PIDs fit in uint32.
 	if err != nil {
+		return nil // no such process
+	}
+	defer windows.CloseHandle(h) //nolint:errcheck
+	var buf [windows.MAX_PATH]uint16
+	size := uint32(windows.MAX_PATH)
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
 		return nil
 	}
-	if err := p.Kill(); err != nil {
+	if !strings.HasPrefix(strings.ToLower(filepath.Base(windows.UTF16ToString(buf[:size]))), "lanesh") {
+		return nil // the PID was reused by another program
+	}
+	if err := windows.TerminateProcess(h, 1); err != nil {
 		return fmt.Errorf("stop daemon: %w", err)
 	}
-	_ = os.Remove(filepath.Join(home, supervisorPIDFile))
 	return nil
 }

@@ -80,7 +80,9 @@ func (c *Conn) Call(ctx context.Context, method string, params, out any) error {
 		c.mu.Unlock()
 	}()
 
-	if err := c.send(ctx, msg); err != nil {
+	// A write interrupted by cancellation would close the whole connection,
+	// so writes are bounded by their own timeout instead of ctx.
+	if err := c.send(context.WithoutCancel(ctx), msg); err != nil {
 		return fmt.Errorf("%w: %w", ErrOffline, err)
 	}
 	select {

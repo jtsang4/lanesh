@@ -15,8 +15,13 @@ import (
 	_ "modernc.org/sqlite" // SQLite driver (pure Go).
 )
 
-// ErrNotFound is returned when a record does not exist.
-var ErrNotFound = errors.New("not found")
+// Errors returned by the store.
+var (
+	ErrNotFound = errors.New("not found")
+	// ErrConflict is returned when joining over an active membership without
+	// proving possession of its current credential.
+	ErrConflict = errors.New("conflict")
+)
 
 // Store wraps the SQLite database.
 type Store struct {
@@ -44,21 +49,15 @@ var migrations = []string{
 		revoked_at INTEGER
 	);
 	CREATE INDEX keys_lane ON keys(lane_id);
-	CREATE TABLE machines (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		os TEXT NOT NULL,
-		arch TEXT NOT NULL,
-		hostname TEXT NOT NULL,
-		version TEXT NOT NULL,
-		first_seen INTEGER NOT NULL,
-		last_seen INTEGER NOT NULL
-	);
 	CREATE TABLE memberships (
 		lane_id TEXT NOT NULL REFERENCES lanes(id) ON DELETE CASCADE,
-		machine_id TEXT NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
+		machine_id TEXT NOT NULL,
 		display_name TEXT NOT NULL,
 		credential_hash TEXT NOT NULL UNIQUE,
+		os TEXT NOT NULL DEFAULT '',
+		arch TEXT NOT NULL DEFAULT '',
+		hostname TEXT NOT NULL DEFAULT '',
+		version TEXT NOT NULL DEFAULT '',
 		expose_skills INTEGER NOT NULL,
 		allow_exec INTEGER NOT NULL,
 		joined_at INTEGER NOT NULL,
@@ -67,9 +66,11 @@ var migrations = []string{
 		PRIMARY KEY (lane_id, machine_id)
 	);
 	CREATE TABLE skill_snapshots (
-		machine_id TEXT PRIMARY KEY REFERENCES machines(id) ON DELETE CASCADE,
+		lane_id TEXT NOT NULL REFERENCES lanes(id) ON DELETE CASCADE,
+		machine_id TEXT NOT NULL,
 		index_json TEXT NOT NULL,
-		updated_at INTEGER NOT NULL
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY (lane_id, machine_id)
 	);
 	CREATE TABLE admin_sessions (
 		hash TEXT PRIMARY KEY,

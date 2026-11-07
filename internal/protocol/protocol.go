@@ -210,6 +210,8 @@ type ExecParams struct {
 	PTY        bool              `json:"pty,omitempty"`
 	Owner      string            `json:"owner,omitempty"`
 	MaxOutput  int               `json:"max_output,omitempty"`
+	// Lane is set by the daemon (never taken from the server) to scope the job.
+	Lane string `json:"-"`
 }
 
 // Job statuses.
@@ -293,6 +295,7 @@ type JobExitedEvent struct {
 	DurationMS int64  `json:"duration_ms"`
 	Command    string `json:"command"`
 	Owner      string `json:"owner,omitempty"`
+	Lane       string `json:"-"`
 }
 
 // Encodings for file content.

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -73,8 +74,9 @@ func runDaemon(ctx context.Context, p daemon.Paths) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	restart := false
-	var once sync.Once
+	var restart, updating atomic.Bool
+	var failedMu sync.Mutex
+	failedAt := map[string]time.Time{}
 	onVersion := func(serverVersion string) {
 		cfg, _ := daemon.LoadConfig(p)
 		if !cfg.AutoUpdate() || !update.IsRelease(serverVersion) || update.Compare(serverVersion, version.Version) <= 0 {
@@ -85,19 +87,26 @@ func runDaemon(ctx context.Context, p daemon.Paths) error {
 				"server", serverVersion, "binary", p.Binary())
 			return
 		}
-		once.Do(func() {
-			slog.Info("updating lanesh", "from", version.Version, "to", serverVersion)
-			uctx, ucancel := context.WithTimeout(ctx, 10*time.Minute)
-			defer ucancel()
-			if err := update.Apply(uctx, cfg.Update.Source, serverVersion, p.Binary()); err != nil {
-				slog.Error("self-update failed", "err", err)
-				once = sync.Once{}
-				return
-			}
-			slog.Info("update installed; restarting")
-			restart = true
-			cancel()
-		})
+		failedMu.Lock()
+		recent := time.Since(failedAt[serverVersion]) < 15*time.Minute
+		failedMu.Unlock()
+		if recent || !updating.CompareAndSwap(false, true) {
+			return
+		}
+		defer updating.Store(false)
+		slog.Info("updating lanesh", "from", version.Version, "to", serverVersion)
+		uctx, ucancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer ucancel()
+		if err := update.Apply(uctx, cfg.Update.Source, serverVersion, p.Binary()); err != nil {
+			slog.Error("self-update failed; will retry later", "err", err)
+			failedMu.Lock()
+			failedAt[serverVersion] = time.Now()
+			failedMu.Unlock()
+			return
+		}
+		slog.Info("update installed; restarting")
+		restart.Store(true)
+		cancel()
 	}
 
 	d, err := daemon.New(ctx, daemon.Options{Paths: p, OnServerVersion: onVersion})
@@ -107,7 +116,7 @@ func runDaemon(ctx context.Context, p daemon.Paths) error {
 	if err := d.Run(ctx); err != nil {
 		return err
 	}
-	if restart {
+	if restart.Load() {
 		return exitError{code: service.ExitRestart}
 	}
 	return nil

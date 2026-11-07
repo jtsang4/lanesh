@@ -46,7 +46,6 @@ type laneConn struct {
 	laneName  string
 	name      string
 	inflight  map[string]context.CancelFunc
-	jobs      map[string]bool
 }
 
 func newLaneConn(ctx context.Context, d *Daemon, lane LaneConfig, cred string, policy protocol.Policy) *laneConn {
@@ -54,7 +53,7 @@ func newLaneConn(ctx context.Context, d *Daemon, lane LaneConfig, cred string, p
 	return &laneConn{
 		d: d, lane: lane, cred: cred, policy: policy, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		since: time.Now(), laneName: lane.LaneName, name: lane.MachineName,
-		inflight: map[string]context.CancelFunc{}, jobs: map[string]bool{},
+		inflight: map[string]context.CancelFunc{},
 	}
 }
 
@@ -149,6 +148,13 @@ func (c *laneConn) session(ctx context.Context) error {
 	c.mu.Lock()
 	c.ws = ws
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.ws == ws {
+			c.ws = nil
+		}
+		c.mu.Unlock()
+	}()
 
 	idx := c.d.skillIndex()
 	hello := protocol.Hello{
@@ -199,7 +205,7 @@ func (c *laneConn) session(ctx context.Context) error {
 			c.mu.Unlock()
 			continue
 		}
-		go c.handle(sessCtx, m)
+		go c.handle(sessCtx, ws, m)
 	}
 }
 
@@ -252,7 +258,21 @@ func (c *laneConn) pingLoop(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
+// send writes to the current connection (used for hello and events).
 func (c *laneConn) send(ctx context.Context, id, typ string, payload any, perr *protocol.Error) error {
+	c.mu.Lock()
+	ws := c.ws
+	c.mu.Unlock()
+	if ws == nil {
+		return errors.New("not connected")
+	}
+	return c.sendOn(ctx, ws, id, typ, payload, perr)
+}
+
+// sendOn writes to a specific connection. The write is bounded by its own
+// timeout rather than ctx: a write interrupted by cancellation would close
+// the connection.
+func (c *laneConn) sendOn(ctx context.Context, ws *websocket.Conn, id, typ string, payload any, perr *protocol.Error) error {
 	m, err := protocol.NewMessage(id, typ, payload)
 	if err != nil {
 		return err
@@ -262,13 +282,7 @@ func (c *laneConn) send(ctx context.Context, id, typ string, payload any, perr *
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	ws := c.ws
-	c.mu.Unlock()
-	if ws == nil {
-		return errors.New("not connected")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -285,13 +299,14 @@ func (c *laneConn) event(typ string, payload any) {
 	}
 }
 
+// ownsJob reports whether a job was started through this lane.
 func (c *laneConn) ownsJob(id string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.jobs[id]
+	lane, ok := c.d.jobs.Lane(id)
+	return ok && lane == c.lane.Key()
 }
 
-func (c *laneConn) handle(ctx context.Context, m protocol.Message) {
+// handle serves one request and replies on the session it arrived on.
+func (c *laneConn) handle(ctx context.Context, ws *websocket.Conn, m protocol.Message) {
 	ctx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	c.inflight[m.ID] = cancel
@@ -305,8 +320,8 @@ func (c *laneConn) handle(ctx context.Context, m protocol.Message) {
 
 	result, err := c.d.dispatch(ctx, c, m.Type, m.Payload)
 	if err != nil {
-		_ = c.send(ctx, m.ID, protocol.TypeError, nil, toProtocolError(err))
+		_ = c.sendOn(ctx, ws, m.ID, protocol.TypeError, nil, toProtocolError(err))
 		return
 	}
-	_ = c.send(ctx, m.ID, protocol.TypeResult, result, nil)
+	_ = c.sendOn(ctx, ws, m.ID, protocol.TypeResult, result, nil)
 }

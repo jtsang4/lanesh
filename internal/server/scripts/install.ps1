@@ -38,9 +38,9 @@ try {
   New-Item -ItemType Directory -Force -Path $binDir | Out-Null
   $exe = Join-Path $binDir 'lanesh.exe'
   if (Test-Path $exe) {
-    # A running executable cannot be replaced, but it can be renamed.
-    Remove-Item -Force -ErrorAction SilentlyContinue "$exe.old"
-    Rename-Item -Path $exe -NewName 'lanesh.exe.old'
+    # A running executable cannot be replaced or deleted, but it can be renamed.
+    Get-ChildItem -Path $binDir -Filter 'lanesh.exe.old*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Rename-Item -Path $exe -NewName ("lanesh.exe.old-" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
   }
   Move-Item -Path (Join-Path $tmp 'lanesh.exe') -Destination $exe
   Write-Host "Installed $exe"

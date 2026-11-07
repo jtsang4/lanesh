@@ -342,7 +342,7 @@ func (s *Server) apiMachineSkills(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	idx, updated, err := s.store.Skills(r.Context(), id)
+	idx, updated, err := s.store.Skills(r.Context(), l.ID, id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -415,7 +415,7 @@ func (s *Server) apiLaneSkills(w http.ResponseWriter, r *http.Request) {
 			_, idx = c.State()
 		}
 		if idx.Hash == "" {
-			idx, _, _ = s.store.Skills(r.Context(), v.ID)
+			idx, _, _ = s.store.Skills(r.Context(), l.ID, v.ID)
 		}
 		for _, sk := range idx.Skills {
 			ls := byName[sk.Name]

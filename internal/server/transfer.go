@@ -129,5 +129,15 @@ func (t *transfers) download(w http.ResponseWriter, r *http.Request) {
 	tr.attach()
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, tr.pr)
+	_, err := io.Copy(w, tr.pr)
+	select {
+	case <-tr.uploaded:
+	default:
+		err = errors.New("upload incomplete")
+	}
+	if err != nil {
+		// Abort the response so that the receiver sees an error instead of a
+		// cleanly terminated (and truncated) stream.
+		panic(http.ErrAbortHandler)
+	}
 }

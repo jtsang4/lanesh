@@ -73,24 +73,31 @@ func TestMemberships(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	l, _ := s.CreateLane(ctx, "home")
+	other, _ := s.CreateLane(ctx, "other")
 	pol := protocol.Policy{ExposeSkills: true, AllowExec: true}
-	for _, id := range []string{"m1", "m2"} {
-		if err := s.UpsertMachine(ctx, Machine{ID: id, Name: "box", OS: "linux", Arch: "amd64", Hostname: "box", Version: "1.0.0"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	a, err := s.Join(ctx, l.ID, "m1", "box", auth.Hash("c1"), pol)
+	m1 := Machine{ID: "m1", OS: "linux", Arch: "amd64", Hostname: "box", Version: "1.0.0"}
+	m2 := Machine{ID: "m2", OS: "linux", Arch: "amd64", Hostname: "box", Version: "1.0.0"}
+
+	a, err := s.Join(ctx, l.ID, m1, "box", auth.Hash("c1"), "", pol)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := s.Join(ctx, l.ID, "m2", "box", auth.Hash("c2"), pol)
+	b, _ := s.Join(ctx, l.ID, m2, "box", auth.Hash("c2"), "", pol)
 	if a.DisplayName != "box" || b.DisplayName != "box-2" {
 		t.Fatalf("names %q %q", a.DisplayName, b.DisplayName)
 	}
-	// Re-joining keeps the name and rotates the credential.
-	again, _ := s.Join(ctx, l.ID, "m1", "renamed", auth.Hash("c3"), pol)
-	if again.DisplayName != "box" {
-		t.Fatalf("rejoin name %q", again.DisplayName)
+
+	// An active membership cannot be taken over with a join key alone.
+	if _, err := s.Join(ctx, l.ID, m1, "evil", auth.Hash("x"), "", pol); !errors.Is(err, ErrConflict) {
+		t.Fatalf("takeover without proof: %v", err)
+	}
+	if _, err := s.Join(ctx, l.ID, m1, "evil", auth.Hash("x"), auth.Hash("wrong"), pol); !errors.Is(err, ErrConflict) {
+		t.Fatalf("takeover with wrong proof: %v", err)
+	}
+	// With the current credential, re-joining rotates it and keeps the name.
+	again, err := s.Join(ctx, l.ID, m1, "renamed", auth.Hash("c3"), auth.Hash("c1"), pol)
+	if err != nil || again.DisplayName != "box" {
+		t.Fatalf("rejoin: %+v %v", again, err)
 	}
 	if _, err := s.MembershipByCredential(ctx, l.ID, auth.Hash("c1")); !errors.Is(err, ErrNotFound) {
 		t.Fatal("old credential must be replaced")
@@ -98,19 +105,28 @@ func TestMemberships(t *testing.T) {
 	if m, err := s.MembershipByCredential(ctx, l.ID, auth.Hash("c3")); err != nil || m.Machine.ID != "m1" {
 		t.Fatalf("m = %+v err = %v", m, err)
 	}
+
+	// A removed machine may join again with a join key.
 	if err := s.RevokeMembership(ctx, l.ID, "m2"); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := s.ListMemberships(ctx, l.ID)
-	if len(list) != 1 {
+	if list, _ := s.ListMemberships(ctx, l.ID); len(list) != 1 {
 		t.Fatalf("list = %+v", list)
 	}
+	if _, err := s.Join(ctx, l.ID, m2, "box", auth.Hash("c4"), "", pol); err != nil {
+		t.Fatalf("rejoin after removal: %v", err)
+	}
 
-	idx := protocol.SkillIndex{Skills: []protocol.Skill{{Name: "a"}}, Hash: "h"}
-	if err := s.SaveSkills(ctx, "m1", idx); err != nil {
+	// Details and skills are stored per lane.
+	if _, err := s.Join(ctx, other.ID, Machine{ID: "m1", OS: "plan9"}, "x", auth.Hash("o1"), "", pol); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := s.Skills(ctx, "m1")
+	if got, _ := s.GetMembership(ctx, l.ID, "m1"); got.Machine.OS != "linux" {
+		t.Fatalf("other lane changed details: %+v", got)
+	}
+	_ = s.SaveSkills(ctx, l.ID, "m1", protocol.SkillIndex{Skills: []protocol.Skill{{Name: "a"}}, Hash: "h"})
+	_ = s.SaveSkills(ctx, other.ID, "m1", protocol.SkillIndex{Hash: "other"})
+	got, _, err := s.Skills(ctx, l.ID, "m1")
 	if err != nil || got.Hash != "h" || len(got.Skills) != 1 {
 		t.Fatalf("skills = %+v err = %v", got, err)
 	}

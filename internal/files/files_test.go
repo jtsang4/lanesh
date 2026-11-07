@@ -103,6 +103,28 @@ func TestPackUnpackFile(t *testing.T) {
 	}
 }
 
+func TestUnpackRejectsTruncatedStream(t *testing.T) {
+	src := t.TempDir()
+	_ = os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o600)
+	// A stream that ends cleanly at an entry boundary but lacks the end marker.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: ".", Typeflag: tar.TypeDir, Mode: 0o755})
+	_ = tw.WriteHeader(&tar.Header{Name: "a.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1})
+	_, _ = tw.Write([]byte("a"))
+	_ = tw.Close()
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	_ = os.MkdirAll(dst, 0o755)
+	_ = os.WriteFile(filepath.Join(dst, "precious.txt"), []byte("keep"), 0o600)
+	if _, err := Unpack(&buf, dst, true); err == nil {
+		t.Fatal("truncated stream must be rejected")
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "precious.txt")); err != nil || string(b) != "keep" {
+		t.Fatal("existing destination must be left untouched")
+	}
+}
+
 func TestUnpackRejectsTraversal(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)

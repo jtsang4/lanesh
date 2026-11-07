@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -58,10 +59,10 @@ func TestLongJobContinuesInBackgroundAndCanBeKilled(t *testing.T) {
 	if st.Status != protocol.JobRunning || st.ExitCode != nil {
 		t.Fatalf("st = %+v", st)
 	}
-	if got := m.List("k1"); len(got) != 1 || got[0].JobID != st.JobID {
+	if got := m.List("", "k1"); len(got) != 1 || got[0].JobID != st.JobID {
 		t.Fatalf("list = %+v", got)
 	}
-	if got := m.List("other"); len(got) != 0 {
+	if got := m.List("", "other"); len(got) != 0 {
 		t.Fatalf("list other = %+v", got)
 	}
 
@@ -130,6 +131,27 @@ func TestJobReadWaitsForOutput(t *testing.T) {
 	}
 }
 
+func TestJobFinishesWhenADescendantKeepsThePipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are Unix-specific")
+	}
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl not available")
+	}
+	m := NewManager(Options{})
+	// The descendant leaves the process group but keeps stdout open.
+	st, err := m.Start(context.Background(), protocol.ExecParams{Command: "perl -e 'setpgrp(0,0); sleep 20' & echo started", TimeoutMS: 15_000}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status == protocol.JobRunning {
+		t.Fatalf("job still running after its shell exited: %+v", st)
+	}
+	if !strings.Contains(st.Stdout, "started") {
+		t.Fatalf("stdout = %q", st.Stdout)
+	}
+}
+
 func TestPTYUnsupported(t *testing.T) {
 	m := NewManager(Options{})
 	if _, err := m.Start(context.Background(), protocol.ExecParams{Command: "x", PTY: true}, ""); !errors.Is(err, ErrUnsupported) {
@@ -151,5 +173,26 @@ func TestRingAndInlineTruncation(t *testing.T) {
 	if !truncated || total != 1000 || !strings.HasPrefix(text, strings.Repeat("a", 50)) ||
 		!strings.HasSuffix(text, strings.Repeat("b", 50)) || !strings.Contains(text, "900 bytes omitted") {
 		t.Fatalf("inline = %q", text)
+	}
+}
+
+func TestRingWrapsAcrossWrites(t *testing.T) {
+	r := newRing(8)
+	var all []byte
+	for _, chunk := range []string{"abc", "defgh", "ij", "klmnopqrst", "u"} {
+		_, _ = r.Write([]byte(chunk))
+		all = append(all, chunk...)
+		want := all
+		if len(want) > 8 {
+			want = want[len(want)-8:]
+		}
+		data, total, dropped := r.Snapshot()
+		if string(data) != string(want) || total != int64(len(all)) || dropped != int64(len(all)-len(want)) {
+			t.Fatalf("after %q: data %q total %d dropped %d", chunk, data, total, dropped)
+		}
+	}
+	data, start, _, _ := r.ReadAt(int64(len(all)-3), 2)
+	if string(data) != "st" || start != int64(len(all)-3) {
+		t.Fatalf("ReadAt = %q %d", data, start)
 	}
 }

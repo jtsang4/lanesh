@@ -72,8 +72,9 @@ func NewManager(opts Options) *Manager {
 }
 
 type job struct {
-	id, owner, command, cwd, shell string
-	started                        time.Time
+	id, owner, lane, command, cwd, shell string
+	cmd                                  *exec.Cmd
+	started                              time.Time
 
 	stdout, stderr *ring
 	stdin          io.WriteCloser
@@ -123,9 +124,13 @@ func (m *Manager) Start(ctx context.Context, p protocol.ExecParams, dir string) 
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	prepare(cmd)
+	setCommandLine(cmd, sh, p.Command)
+	// Descendants that leave the process group can keep the output pipes
+	// open; stop waiting for them shortly after the command itself exits.
+	cmd.WaitDelay = 5 * time.Second
 
 	j := &job{
-		id: auth.NewID("job_"), owner: p.Owner, command: p.Command, cwd: dir, shell: sh.Name,
+		id: auth.NewID("job_"), owner: p.Owner, lane: p.Lane, cmd: cmd, command: p.Command, cwd: dir, shell: sh.Name,
 		stdout: newRing(m.opts.BufferSize), stderr: newRing(m.opts.BufferSize),
 		done: make(chan struct{}), status: protocol.JobRunning,
 	}
@@ -151,13 +156,21 @@ func (m *Manager) Start(ctx context.Context, p protocol.ExecParams, dir string) 
 
 	go m.wait(j, cmd)
 
-	if p.Stdin != "" {
-		_, _ = io.WriteString(stdin, p.Stdin)
-	}
-	if !p.Background {
-		// Foreground commands get EOF on stdin so that they cannot hang on input.
-		j.closeStdin()
-	}
+	// Stdin is written asynchronously: a command that does not read it must
+	// not block the request beyond its timeout.
+	go func() {
+		if p.Stdin != "" {
+			j.stdinMu.Lock()
+			if j.stdin != nil {
+				_, _ = io.WriteString(j.stdin, p.Stdin)
+			}
+			j.stdinMu.Unlock()
+		}
+		if !p.Background {
+			// Foreground commands get EOF on stdin so that they cannot hang on input.
+			j.closeStdin()
+		}
+	}()
 
 	maxOut := p.MaxOutput
 	if maxOut <= 0 {
@@ -217,7 +230,7 @@ func (m *Manager) wait(j *job, cmd *exec.Cmd) {
 	if m.opts.OnExit != nil {
 		m.opts.OnExit(protocol.JobExitedEvent{
 			JobID: j.id, Status: status, ExitCode: &code, DurationMS: dur.Milliseconds(),
-			Command: j.command, Owner: j.owner,
+			Command: j.command, Owner: j.owner, Lane: j.lane,
 		})
 	}
 }
@@ -371,12 +384,14 @@ func (m *Manager) Kill(p protocol.JobKillParams) (protocol.JobStatus, error) {
 	j.mu.Lock()
 	j.killed = true
 	j.mu.Unlock()
-	if j.group != nil {
-		if p.Signal == "" || p.Signal == "KILL" || p.Signal == "SIGKILL" {
-			_ = j.group.kill()
-		} else {
-			_ = j.group.signal(p.Signal)
-		}
+	hard := p.Signal == "" || p.Signal == "KILL" || p.Signal == "SIGKILL"
+	switch {
+	case j.group != nil && hard:
+		_ = j.group.kill()
+	case j.group != nil:
+		_ = j.group.signal(p.Signal)
+	default:
+		_ = j.cmd.Process.Kill()
 	}
 	select {
 	case <-j.done:
@@ -384,18 +399,46 @@ func (m *Manager) Kill(p protocol.JobKillParams) (protocol.JobStatus, error) {
 		if j.group != nil {
 			_ = j.group.kill()
 		}
-		<-j.done
+		_ = j.cmd.Process.Kill()
+		select {
+		case <-j.done:
+		case <-time.After(10 * time.Second):
+		}
 	}
 	return m.status(j, DefaultMaxOutput), nil
 }
 
-// List returns jobs, newest first, optionally filtered by owner.
-func (m *Manager) List(owner string) []protocol.JobStatus {
+// Lane returns the lane a job belongs to.
+func (m *Manager) Lane(id string) (string, bool) {
+	j, err := m.get(id)
+	if err != nil {
+		return "", false
+	}
+	return j.lane, true
+}
+
+// KillLane kills the running jobs of a lane.
+func (m *Manager) KillLane(lane string) {
+	m.mu.Lock()
+	var ids []string
+	for id, j := range m.jobs {
+		if j.lane == lane {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		_, _ = m.Kill(protocol.JobKillParams{JobID: id})
+	}
+}
+
+// List returns a lane's jobs, newest first, optionally filtered by owner.
+func (m *Manager) List(lane, owner string) []protocol.JobStatus {
 	m.mu.Lock()
 	m.gcLocked()
 	jobs := make([]*job, 0, len(m.jobs))
 	for _, j := range m.jobs {
-		if owner == "" || j.owner == owner {
+		if j.lane == lane && (owner == "" || j.owner == owner) {
 			jobs = append(jobs, j)
 		}
 	}

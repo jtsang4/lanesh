@@ -40,6 +40,8 @@ type Daemon struct {
 	jobs      *runner.Manager
 	audit     *auditLog
 
+	stateMu sync.Mutex
+
 	mu    sync.RWMutex
 	env   []string
 	index protocol.SkillIndex
@@ -134,6 +136,9 @@ func (d *Daemon) reconcile(ctx context.Context) {
 			if c.cred == cred && c.policy == policy && !globalChanged {
 				continue
 			}
+			if c.policy.AllowExec && !policy.AllowExec {
+				go d.jobs.KillLane(key) // exec was turned off: stop what is running
+			}
 			c.stop()
 			delete(d.conns, key)
 		}
@@ -149,6 +154,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 		if !want[key] {
 			c.stop()
 			delete(d.conns, key)
+			go d.jobs.KillLane(key) // left the lane
 		}
 	}
 	d.mu.Unlock()
@@ -195,7 +201,7 @@ func (d *Daemon) onSkillsChanged(idx protocol.SkillIndex) {
 func (d *Daemon) onJobExit(e protocol.JobExitedEvent) {
 	d.audit.write("job.exited", map[string]any{"job_id": e.JobID, "status": e.Status, "exit_code": e.ExitCode, "duration_ms": e.DurationMS})
 	for _, c := range d.connections() {
-		if c.ownsJob(e.JobID) {
+		if c.lane.Key() == e.Lane {
 			c.event(protocol.EventJobExited, e)
 		}
 	}
@@ -247,6 +253,8 @@ type LaneState struct {
 var startedAt = time.Now()
 
 func (d *Daemon) writeState() {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
 	st := State{
 		PID: os.Getpid(), Version: version.Version, MachineID: d.machineID, StartedAt: startedAt,
 		UpdatedAt: time.Now(), Skills: len(d.skillIndex().Skills), Lanes: []LaneState{},

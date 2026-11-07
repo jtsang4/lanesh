@@ -71,9 +71,14 @@ func Join(ctx context.Context, p Paths, o JoinOptions) (JoinResult, error) {
 	if name == "" {
 		name = hostname
 	}
+	creds, err := LoadCredentials(p)
+	if err != nil {
+		return JoinResult{}, err
+	}
 	body, _ := json.Marshal(map[string]any{
 		"machine_id": id, "name": name, "os": runtime.GOOS, "arch": runtime.GOARCH,
 		"hostname": hostname, "version": version.Version, "policy": policy,
+		"credential": creds[lane.Key()],
 	})
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -108,10 +113,6 @@ func Join(ctx context.Context, p Paths, o JoinOptions) (JoinResult, error) {
 		cfg.Lanes[i] = lane
 	} else {
 		cfg.Lanes = append(cfg.Lanes, lane)
-	}
-	creds, err := LoadCredentials(p)
-	if err != nil {
-		return JoinResult{}, err
 	}
 	creds[lane.Key()] = jr.Credential
 	if err := SaveCredentials(p, creds); err != nil {

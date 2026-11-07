@@ -72,9 +72,8 @@ func ReadFile(path string, offset, limit int64, encoding string) (protocol.FileR
 	if info.IsDir() {
 		return protocol.FileReadResult{}, fmt.Errorf("%s is a directory", path)
 	}
-	if offset < 0 || offset > info.Size() {
-		offset = 0
-	}
+	offset = max(offset, 0)
+	offset = min(offset, info.Size())
 	buf := make([]byte, limit)
 	n, err := f.ReadAt(buf, offset)
 	if err != nil && !errors.Is(err, io.EOF) {

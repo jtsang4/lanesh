@@ -17,6 +17,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtsang4/lanesh/internal/daemon"
+	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
 const testAdminToken = "lsa_test_admin_token"
@@ -374,6 +375,65 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("removed machine: %q", errText)
 	}
 	_ = fmt.Sprint(b)
+}
+
+func TestJoinCannotTakeOverAMachine(t *testing.T) {
+	h := newHarness(t)
+	a := h.startMachine("alpha", true)
+	id, err := daemon.MachineID(a.paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Someone with only the join key claims alpha's machine ID.
+	body, _ := json.Marshal(map[string]any{"machine_id": id, "name": "evil", "policy": map[string]bool{"allow_exec": true}})
+	req, _ := http.NewRequestWithContext(h.ctx, http.MethodPost, h.http.URL+"/lanes/"+h.laneID+"/join", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+h.join)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("takeover join = %d, want 409", resp.StatusCode)
+	}
+	h.waitOnline("alpha", true)
+
+	// The machine itself can re-join: it proves its current credential.
+	if _, err := daemon.Join(h.ctx, a.paths, daemon.JoinOptions{LaneURL: h.http.URL + "/lanes/" + h.laneID, Key: h.join}); err != nil {
+		t.Fatalf("re-join from the machine: %v", err)
+	}
+	h.waitOnline("alpha", true)
+
+	// Names can never collide with machine IDs.
+	if got := sanitizeName("mch_"+strings.ToLower(id[4:]), ""); strings.HasPrefix(got, "mch_") {
+		t.Fatalf("sanitizeName kept the ID prefix: %q", got)
+	}
+}
+
+func TestCancelledCallsKeepTheConnection(t *testing.T) {
+	h := newHarness(t)
+	h.startMachine("alpha", true)
+	var views []MachineView
+	h.api(http.MethodGet, "/api/v1/lanes/"+h.laneID+"/machines", nil, &views, http.StatusOK)
+	id := views[0].ID
+
+	var st protocol.JobStatus
+	cmd := shellCmd("sleep 30", "Start-Sleep -Seconds 30")
+	if err := h.srv.call(h.ctx, h.laneID, id, protocol.MethodExecStart, protocol.ExecParams{Command: cmd, Background: true}, &st); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		ctx, cancel := context.WithTimeout(h.ctx, 30*time.Millisecond)
+		_ = h.srv.call(ctx, h.laneID, id, protocol.MethodJobRead, protocol.JobReadParams{JobID: st.JobID, WaitMS: 2000}, nil)
+		cancel()
+	}
+	time.Sleep(300 * time.Millisecond)
+	var res protocol.JobReadResult
+	if err := h.srv.call(h.ctx, h.laneID, id, protocol.MethodJobRead, protocol.JobReadParams{JobID: st.JobID}, &res); err != nil {
+		t.Fatalf("connection lost after cancelled calls: %v", err)
+	}
+	_ = h.srv.call(h.ctx, h.laneID, id, protocol.MethodJobKill, protocol.JobKillParams{JobID: st.JobID}, nil)
 }
 
 func TestAdminAuthAndInstallScripts(t *testing.T) {

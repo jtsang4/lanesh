@@ -92,13 +92,11 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 		if err != nil {
 			return nil, err
 		}
+		p.Lane = c.lane.Key()
 		st, err := d.jobs.Start(ctx, p, dir)
 		if err != nil {
 			return nil, err
 		}
-		c.mu.Lock()
-		c.jobs[st.JobID] = true
-		c.mu.Unlock()
 		d.audit.write("exec", map[string]any{"lane": c.lane.LaneID, "job_id": st.JobID, "command": p.Command, "cwd": dir, "owner": p.Owner})
 		return st, nil
 
@@ -138,16 +136,7 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 		if err != nil {
 			return nil, err
 		}
-		var jobs []protocol.JobStatus
-		for _, j := range d.jobs.List(p.Owner) {
-			if c.ownsJob(j.JobID) {
-				jobs = append(jobs, j)
-			}
-		}
-		if jobs == nil {
-			jobs = []protocol.JobStatus{}
-		}
-		return protocol.JobListResult{Jobs: jobs}, nil
+		return protocol.JobListResult{Jobs: d.jobs.List(c.lane.Key(), p.Owner)}, nil
 
 	case protocol.MethodFileRead:
 		p, err := decodeParams[protocol.FileReadParams](raw)

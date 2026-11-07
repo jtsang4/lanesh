@@ -26,6 +26,9 @@ type JoinRequest struct {
 	Hostname  string          `json:"hostname"`
 	Version   string          `json:"version"`
 	Policy    protocol.Policy `json:"policy"`
+	// Credential is the machine's current credential for this lane, if it has
+	// one. It is required to re-join while the membership is active.
+	Credential string `json:"credential,omitempty"`
 }
 
 // JoinResponse returns the machine credential.
@@ -63,14 +66,18 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "lane not found")
 		return
 	}
-	if err := s.store.UpsertMachine(r.Context(), store.Machine{
-		ID: req.MachineID, Name: req.Name, OS: req.OS, Arch: req.Arch, Hostname: req.Hostname, Version: req.Version,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "%v", err)
-		return
+	proof := ""
+	if req.Credential != "" {
+		proof = auth.Hash(req.Credential)
 	}
 	credential := auth.NewToken(auth.PrefixMachine)
-	m, err := s.store.Join(r.Context(), laneID, req.MachineID, req.Name, auth.Hash(credential), req.Policy)
+	m, err := s.store.Join(r.Context(), laneID, store.Machine{
+		ID: req.MachineID, OS: req.OS, Arch: req.Arch, Hostname: req.Hostname, Version: req.Version,
+	}, req.Name, auth.Hash(credential), proof, req.Policy)
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "this machine is already a member of the lane; remove it in the web UI to join it again")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -104,6 +111,10 @@ func sanitizeName(name, fallback string) string {
 		}
 	}
 	out := strings.Trim(b.String(), "-")
+	// Names must never look like machine IDs, which are resolved first.
+	if rest, ok := strings.CutPrefix(out, "mch_"); ok {
+		out = "mch-" + rest
+	}
 	if len(out) > 48 {
 		out = out[:48]
 	}
@@ -164,10 +175,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.store.UpsertMachine(ctx, store.Machine{
-		ID: hello.MachineID, Name: hello.Name, OS: hello.OS, Arch: hello.Arch, Hostname: hello.Hostname, Version: hello.Version,
-	})
-	_ = s.store.TouchMembership(ctx, m.LaneID, m.Machine.ID, hello.Policy)
+	_ = s.store.UpdateMembership(ctx, m.LaneID, store.Machine{
+		ID: hello.MachineID, OS: hello.OS, Arch: hello.Arch, Hostname: hello.Hostname, Version: hello.Version,
+	}, hello.Policy)
 	lane, _ := s.store.GetLane(ctx, m.LaneID)
 
 	c := newConn(ws, m.LaneID, hello)
@@ -183,7 +193,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		s.hub.remove(c)
 		c.Close(websocket.StatusNormalClosure, "")
-		_ = s.store.TouchMembership(context.WithoutCancel(ctx), m.LaneID, m.Machine.ID, hello.Policy)
+		_ = s.store.TouchMembership(context.WithoutCancel(ctx), m.LaneID, m.Machine.ID)
 		slog.Info("machine disconnected", "lane", m.LaneID, "machine", m.DisplayName)
 	}()
 
@@ -226,7 +236,7 @@ func (s *Server) refreshDescribe(ctx context.Context, c *Conn) {
 		return
 	}
 	c.setDescribe(d)
-	if err := s.store.SaveSkills(ctx, c.MachineID, d.Skills); err != nil {
+	if err := s.store.SaveSkills(ctx, c.LaneID, c.MachineID, d.Skills); err != nil {
 		slog.Warn("save skills failed", "err", err)
 	}
 }
@@ -238,7 +248,7 @@ func (s *Server) onEvent(c *Conn, m protocol.Message) {
 		var idx protocol.SkillIndex
 		if json.Unmarshal(m.Payload, &idx) == nil {
 			c.setSkills(idx)
-			_ = s.store.SaveSkills(ctx, c.MachineID, idx)
+			_ = s.store.SaveSkills(ctx, c.LaneID, c.MachineID, idx)
 		}
 	case protocol.EventJobExited:
 		var e protocol.JobExitedEvent

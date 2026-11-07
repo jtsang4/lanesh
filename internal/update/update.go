@@ -2,6 +2,7 @@
 package update
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -52,18 +53,41 @@ func Compare(a, b string) int {
 			return 1
 		}
 	}
+	return comparePrerelease(ma[4], mb[4])
+}
+
+// comparePrerelease orders prerelease tags per semver: a release sorts after
+// its prereleases; dot-separated identifiers compare numerically when both
+// are numbers and lexically otherwise.
+func comparePrerelease(a, b string) int {
 	switch {
-	case ma[4] == mb[4]:
+	case a == b:
 		return 0
-	case ma[4] == "":
+	case a == "":
 		return 1
-	case mb[4] == "":
+	case b == "":
 		return -1
-	case ma[4] < mb[4]:
-		return -1
-	default:
-		return 1
 	}
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		x, errx := strconv.Atoi(pa[i])
+		y, erry := strconv.Atoi(pb[i])
+		switch {
+		case errx == nil && erry == nil:
+			if x != y {
+				return cmp.Compare(x, y)
+			}
+		case errx == nil:
+			return -1
+		case erry == nil:
+			return 1
+		default:
+			if c := strings.Compare(pa[i], pb[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	return cmp.Compare(len(pa), len(pb))
 }
 
 // AssetName is the raw binary asset for a version on this platform.
@@ -159,8 +183,11 @@ func Install(data []byte, binary string) error {
 	}
 	if runtime.GOOS == "windows" {
 		if _, err := os.Stat(binary); err == nil {
-			_ = os.Remove(binary + ".old")
-			if err := os.Rename(binary, binary+".old"); err != nil {
+			// A running image cannot be replaced or deleted, but it can be
+			// renamed. Use a unique name: an earlier .old may still be running
+			// (for example the supervisor).
+			Cleanup(binary)
+			if err := os.Rename(binary, fmt.Sprintf("%s.old-%d", binary, time.Now().UnixNano())); err != nil {
 				return err
 			}
 		}
@@ -168,9 +195,12 @@ func Install(data []byte, binary string) error {
 	return os.Rename(tmp, binary)
 }
 
-// Cleanup removes leftovers of a previous Windows update.
+// Cleanup removes leftovers of previous Windows updates that are no longer running.
 func Cleanup(binary string) {
-	_ = os.Remove(binary + ".old")
+	old, _ := filepath.Glob(binary + ".old*")
+	for _, f := range old {
+		_ = os.Remove(f)
+	}
 }
 
 // SameFile reports whether the running executable is binary.

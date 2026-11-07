@@ -58,7 +58,7 @@ func (s *Server) machineViews(ctx context.Context, laneID string) ([]MachineView
 			} else {
 				v.SkillCount, v.SkillsHash = c.Hello.SkillCount, c.Hello.SkillsHash
 			}
-		} else if idx, _, err := s.store.Skills(ctx, m.Machine.ID); err == nil {
+		} else if idx, _, err := s.store.Skills(ctx, laneID, m.Machine.ID); err == nil {
 			v.SkillCount, v.SkillsHash = len(idx.Skills), idx.Hash
 		}
 		out = append(out, v)
@@ -72,8 +72,14 @@ func (s *Server) resolveMachine(ctx context.Context, laneID, ref string) (Machin
 		return MachineView{}, err
 	}
 	ref = strings.TrimSpace(ref)
+	// IDs take precedence over names.
 	for _, v := range views {
-		if v.ID == ref || strings.EqualFold(v.Name, ref) {
+		if v.ID == ref {
+			return v, nil
+		}
+	}
+	for _, v := range views {
+		if strings.EqualFold(v.Name, ref) {
 			return v, nil
 		}
 	}

@@ -22,6 +22,11 @@ type Stats struct {
 	SHA   string // SHA-256 of the transfer stream, compared end to end
 }
 
+// completeKey marks the end of a transfer stream. It is written as a PAX
+// global header, which no regular file can produce, so that a stream cut at an
+// entry boundary is detected instead of being taken as complete.
+const completeKey = "LANESH.complete"
+
 type countingHash struct {
 	h hash.Hash
 	n int64
@@ -105,6 +110,9 @@ func Pack(w io.Writer, src string) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{completeKey: "1"}}); err != nil {
+		return Stats{}, err
+	}
 	if err := tw.Close(); err != nil {
 		return Stats{}, err
 	}
@@ -133,7 +141,7 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 	tr := tar.NewReader(io.TeeReader(r, ch))
 	files := 0
 	var content int64
-	sawRoot := false
+	sawRoot, complete := false, false
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -141,6 +149,10 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 		}
 		if err != nil {
 			return Stats{}, fmt.Errorf("read transfer stream: %w", err)
+		}
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			complete = complete || hdr.PAXRecords[completeKey] == "1"
+			continue
 		}
 		name := strings.TrimSuffix(hdr.Name, "/")
 		var target string
@@ -186,6 +198,9 @@ func Unpack(r io.Reader, dst string, overwrite bool) (Stats, error) {
 	_, _ = io.Copy(io.Discard, io.TeeReader(r, ch))
 	if !sawRoot {
 		return Stats{}, errors.New("transfer stream is empty")
+	}
+	if !complete {
+		return Stats{}, errors.New("transfer stream ended early; nothing was written")
 	}
 	if err := replace(root, dst); err != nil {
 		return Stats{}, err

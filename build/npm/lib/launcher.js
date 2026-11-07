@@ -7,9 +7,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export const DEFAULT_DOWNLOAD_BASE = 'https://github.com/jtsang4/lanesh/releases/download';
 
@@ -53,10 +53,29 @@ export function compareVersions(a, b) {
   for (let i = 0; i < 3; i++) {
     if (pa.nums[i] !== pb.nums[i]) return pa.nums[i] < pb.nums[i] ? -1 : 1;
   }
-  if (pa.pre === pb.pre) return 0;
-  if (!pa.pre) return 1;
-  if (!pb.pre) return -1;
-  return pa.pre < pb.pre ? -1 : 1;
+  return comparePrerelease(pa.pre, pb.pre);
+}
+
+// Orders prerelease tags per semver (numeric identifiers compare numerically).
+function comparePrerelease(a, b) {
+  if (a === b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  const xa = a.split('.');
+  const xb = b.split('.');
+  for (let i = 0; i < Math.min(xa.length, xb.length); i++) {
+    const na = /^\d+$/.test(xa[i]);
+    const nb = /^\d+$/.test(xb[i]);
+    if (na && nb) {
+      const d = Number(xa[i]) - Number(xb[i]);
+      if (d !== 0) return d < 0 ? -1 : 1;
+    } else if (na !== nb) {
+      return na ? -1 : 1;
+    } else if (xa[i] !== xb[i]) {
+      return xa[i] < xb[i] ? -1 : 1;
+    }
+  }
+  return xa.length === xb.length ? 0 : xa.length < xb.length ? -1 : 1;
 }
 
 /** Returns true for versions that have no published release (local builds). */
@@ -113,10 +132,17 @@ export async function install(version, { env = process.env, target = resolveTarg
   chmodSync(tmp, 0o755);
 
   if (target.os === 'windows' && existsSync(bin)) {
-    // A running .exe cannot be overwritten, but it can be renamed.
-    const old = `${bin}.old`;
-    rmSync(old, { force: true });
-    renameSync(bin, old);
+    // A running .exe cannot be overwritten or deleted, but it can be renamed.
+    for (const f of readdirSync(dirname(bin))) {
+      if (f.startsWith(`${basename(bin)}.old`)) {
+        try {
+          rmSync(join(dirname(bin), f), { force: true });
+        } catch {
+          // still running
+        }
+      }
+    }
+    renameSync(bin, `${bin}.old-${Date.now()}`);
   }
   renameSync(tmp, bin);
   return bin;

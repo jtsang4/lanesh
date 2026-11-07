@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -192,19 +193,37 @@ func SaveCredentials(p Paths, creds map[string]string) error {
 	return writePrivate(p.Credentials(), raw, 0o600)
 }
 
+// writePrivate atomically replaces path with data. The temporary file is
+// unique, so concurrent writers never clobber each other's partial files, and
+// the destination is never removed before the new content is in place.
 func writePrivate(path string, data []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(path)
-		return os.Rename(tmp, path)
+	tmp := f.Name()
+	defer os.Remove(tmp) //nolint:errcheck // No-op after a successful rename.
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
 	}
-	return nil
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return err
+	}
+	// On Windows a rename can fail briefly while another process reads the file.
+	for i := 0; ; i++ {
+		err = os.Rename(tmp, path)
+		if err == nil || i == 10 {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // MachineID returns the persistent machine ID, creating it on first use.

@@ -123,16 +123,17 @@ Server 真正的开销是文件传输时转发的带宽，通过控制面与数�
 lanesh join https://lanesh.example.com/lanes/<lane-id> --key lsj_xxx [--name my-mac] [--no-exec]
 ```
 
-1. 守护进程用 join key 调用 `POST /lanes/{lane}/join`，提交机器 ID、名称、系统信息。
-2. Server 校验 join key，在该 Lane 中登记机器，并签发 machine credential。
+1. 守护进程用 join key 调用 `POST /lanes/{lane}/join`，提交机器 ID、名称、系统信息；如果本机已经持有该 Lane 的 machine credential，一并提交作为证明。
+2. Server 校验 join key，在该 Lane 中登记机器，并签发新的 machine credential。如果这台机器在该 Lane 中已有生效的成员关系，必须提交当前凭证才能重新加入（凭证随之轮换），否则返回 `409`。这样仅凭 join key 无法冒用已有机器的 ID 接管它；被管理员移除的机器可以用 join key 重新加入。
 3. 守护进程把 machine credential 保存到本地凭证文件（权限 0600），之后用它建立 WebSocket 连接。
 4. 如果还没安装后台服务，则安装并启动（见 §11）。
 
 ### 4.3 机器身份
 
 - 首次运行时生成一个全局唯一的机器 ID，保存在 `~/.lanesh/machine-id`。重连、重装守护进程都沿用同一个 ID。
-- 显示名默认取主机名，可以修改。同一 Lane 内名称冲突时，Server 自动追加后缀。
-- MCP 工具里的 `machine` 参数同时接受机器名和机器 ID。
+- 显示名默认取主机名，可以修改。同一 Lane 内名称冲突时，Server 自动追加后缀。名称不能以 `mch_` 开头，避免和机器 ID 混淆。
+- MCP 工具里的 `machine` 参数同时接受机器名和机器 ID，ID 优先匹配。
+- 机器上报的系统信息和 skill 快照按 `(Lane, 机器)` 分别保存，一个 Lane 无法影响另一个 Lane 看到的内容。
 - 一台机器可以加入多个 Lane，这些 Lane 可以在不同的 Server 上。每个成员关系各有一个 machine credential 和一条 WebSocket 连接。
 
 ### 4.4 提供方策略
@@ -288,8 +289,9 @@ Server ──transfer.receive(ticket)─▶ B ◀─GET /transfers/{id}/download
 4. 任一方在超时时间内没有连上，传输失败并通知另一方。
 5. 目录传输时打成 tar 流（Go `archive/tar`），保留相对路径和 Unix 权限位；在 Windows 上对权限位做近似处理。
 6. 目标机器先写入临时路径，完成并校验后再原子移动到目标路径。`overwrite` 默认为 `false`。
-7. 返回传输字节数、文件数、耗时和 sha256。
-8. 源和目标可以是同一台机器，同样经由 Server 中转。
+7. tar 流以一个 PAX 全局头作为结束标记，普通文件无法伪造它。接收方只有读到结束标记才会替换目标路径；上传中途失败时 Server 会中断下载流。这样被截断的传输不会覆盖目标路径原有的内容。
+8. 返回文件总字节数、文件数和传输流的 sha256。
+9. 源和目标可以是同一台机器，同样经由 Server 中转。
 
 单次传输大小上限可通过 `LANESH_TRANSFER_MAX_BYTES` 配置。
 
@@ -419,9 +421,8 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 
 - `lanes`：`id`、`name`、`created_at`
 - `keys`：`id`、`lane_id`、`kind`（`join` / `access`）、`name`、`hash`、`prefix`、`expires_at`、`created_at`、`last_used_at`、`revoked_at`
-- `machines`：`id`、`name`、`os`、`arch`、`version`、`first_seen`、`last_seen`
-- `memberships`：`lane_id`、`machine_id`、`display_name`、`credential_hash`、`policy`、`joined_at`、`revoked_at`
-- `skill_snapshots`：`machine_id`、`index_json`、`updated_at`（用于离线时在 UI 中展示）
+- `memberships`：`lane_id`、`machine_id`、`display_name`、`credential_hash`、`os`、`arch`、`hostname`、`version`、`expose_skills`、`allow_exec`、`joined_at`、`last_seen`、`revoked_at`
+- `skill_snapshots`：`lane_id`、`machine_id`、`index_json`、`updated_at`（用于离线时在 UI 中展示）
 - `admin_sessions`：Web UI 登录会话
 - `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
 
@@ -647,7 +648,9 @@ docs/                      # 设计、管理 API、发布流程
 - 提供方策略在机器本地生效，Server 和消费方都无法越权。
 - 守护进程以普通用户身份运行，不提权。
 - `read_skill` 拒绝访问 skill 目录以外的路径。
-- 登录和凭证校验失败都有速率限制。
+- 登录和加入都有速率限制。只有当请求来自本机或内网地址（即前置反向代理）时，才信任 `X-Forwarded-For` / `X-Real-IP`。
+- 每台机器同时最多运行 64 个任务；`job_kill` 和守护进程退出都有超时，脱离进程组的子进程不会让任务永远处于运行状态。
+- 某个 Lane 被移除或关闭执行权限时，守护进程会结束该 Lane 正在运行的任务。
 - Server 和机器本地双重审计。
 - 自动升级只从配置的来源下载，并校验 sha256。
 

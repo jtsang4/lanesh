@@ -36,6 +36,7 @@ test('compareVersions orders semantic versions', () => {
   assert.equal(compareVersions('1.2.3', '1.10.0'), -1);
   assert.equal(compareVersions('v2.0.0', '1.9.9'), 1);
   assert.equal(compareVersions('1.0.0-rc.1', '1.0.0'), -1);
+  assert.equal(compareVersions('1.0.0-rc.10', '1.0.0-rc.9'), 1);
   assert.equal(compareVersions('dev', '0.1.0'), -1);
 });
 
