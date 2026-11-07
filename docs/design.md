@@ -30,6 +30,7 @@ Lanesh 把分散在多台机器上的 Agent skill 和执行环境，通过一个
 - **凭证即角色**：角色由所持凭证决定，不由连接参数自行声明。
 - **控制面与数据面分离**：命令和元数据走 WebSocket 控制通道，文件内容走独立的 HTTP 数据流。
 - **自托管优先**：单二进制或容器镜像部署，只依赖一个 SQLite 文件。
+- **不侵入本地 skill 目录**：Lanesh 只读取 `~/.agents/skills` 和 `~/.claude/skills`，从不向任何本地 skill 目录写入内容，包括为远程 skill 生成本地占位或镜像。远程 skill 只通过 MCP 工具呈现给 Agent。
 
 ### 1.4 v1 范围
 
@@ -314,14 +315,15 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 ### 8.2 Server instructions
 
-MCP `initialize` 返回的 `instructions` 字段说明使用流程（定义在 `internal/mcp/mcp.go`）：
+`instructions` 按 Lane 动态生成（`internal/mcp/briefing.go` 中的 `Instructions`），每次建立 MCP 连接时根据 Lane 的当前状态生成：
 
-> Lanesh gives you access to several machines in one lane. Each machine has its own globally installed agent skills, its own shell and its own files.
-> 1. Call list_machines to see which machines exist and which are online.
-> 2. Before using a machine, call describe_machine for it. It returns the machine's environment, what it allows, its installed skills, and a briefing token. Every other tool that touches that machine requires the briefing token, so describe a machine before working with it.
-> 3. Skills live on the machine where they are installed. Read them with read_skill. When a skill tells you to run a script, run it on that same machine with exec, passing skill so that the working directory is the skill directory. Use the machine's shell syntax (see describe_machine).
-> 4. Files are not shared between machines. Use transfer to copy files or directories from one machine to another; use read_file and write_file only for small files.
-> 5. Long-running commands keep running in the background after exec returns; follow them with job_read and stop them with job_kill.
+- **前 512 字符**是使用流程：先 `describe_machine` 拿简报令牌、每次调用带上令牌、调用返回简报时阅读后带新令牌重试、在 skill 所在的机器上执行脚本、用 `transfer` 在机器之间传文件。OpenAI 建议把关键信息放在 instructions 的前 512 字符。
+- **其后**是补充说明，以及连接时的机器清单：名称、系统/架构、默认 shell、skill 数量、是否禁止执行、是否离线。
+- **总长度不超过 2,000 字符**。Claude Code 只保留每个服务 instructions 的前 2,048 字符；机器太多时，清单末尾改为"还有 N 台，请调用 `list_machines`"。
+- 不包含 skill 列表和简报令牌。Agent 必须真正看过某台机器的简报，才能操作它。
+- 不能假设客户端会把 instructions 放进系统提示：规范只说"可以"，实测 Claude Code 2.1.285 把它作为第一条用户消息里的附件注入。所以 instructions 只用于引导，正确性由 §8.4 的令牌机制保证。
+
+服务端为每个 Lane 缓存一个 MCP server 实例，instructions 内容变化时才重建。
 
 ### 8.3 工具
 
@@ -340,7 +342,7 @@ MCP `initialize` 返回的 `instructions` 字段说明使用流程（定义在 `
 - skill 列表：`name`、`description`、`source`（`agents` 或 `claude`）、`path`（绝对路径）、`hash`
 - `shadowed`：因同名被覆盖的 skill（名称和来源）
 
-同时返回一个简报令牌 `briefing`，其他操作这台机器的工具都需要它（见 §8.4）。
+同时返回简报令牌 `briefing`（形如 `build-box:k3f9q2ab`），其他操作这台机器的工具都需要它（见 §8.4）。
 
 **`read_skill(machine, briefing, skill, path?, offset?, limit?)`**
 
@@ -372,19 +374,43 @@ MCP `initialize` 返回的 `instructions` 字段说明使用流程（定义在 `
 
 目的：确保 Agent 在操作一台机器之前，已经了解它的环境和已安装的 skill。
 
-最初的方案是按 MCP 会话（`Mcp-Session-Id`）记录哪些机器已经 describe 过。但 MCP 新版协议（2026-07-28，SEP-2567 / SEP-2575）走向无会话：请求不再携带会话 ID，每个请求自带客户端信息。按会话检查在新客户端上会失效，所以改为令牌方案，对新旧协议都有效：
+**为什么用令牌**
 
-- `describe_machine` 返回 `briefing`，形如 `brf_…`。它是对 `(lane, machine, 签发时间, skill 索引摘要)` 的 HMAC 签名，密钥保存在 Server 的 SQLite 中。Server 不需要保存会话状态，重启后令牌依然有效。
-- `read_skill`、`exec`、`read_file`、`write_file` 必须带上对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。缺少或不匹配时返回错误：
+- MCP 2026-07-28 版协议取消了协议层会话和 `Mcp-Session-Id`（SEP-2567、SEP-2575），服务端无法知道两次请求是否来自同一个对话。规范给出的做法是："需要跨调用状态的服务端，使用由服务端签发、作为普通工具参数传递的句柄"。简报令牌就是这样的句柄。
+- 不能依赖 instructions 承载简报（见 §8.2 的长度和位置限制）。
+- 官方 Skills 扩展（SEP-2640）暂不适用，见 §16。
 
-  > `machine "build-box" has not been described in this conversation: call describe_machine("build-box") first and pass its briefing token`
+**令牌**
 
-- 令牌绑定 Lane 和机器，一台机器的令牌不能用于另一台机器。
-- Agent 只有真正调用过 `describe_machine` 才能拿到令牌；每个对话的上下文彼此隔离，无法拿到别的对话的令牌，所以检查天然是按对话生效的。子 Agent 如果没有从主 Agent 拿到令牌，也需要自己 describe。
-- 令牌里带有签发时的 skill 索引摘要。如果之后这台机器的 skill 发生变化，工具照常执行，但结果里会附带 `notice`，提示重新调用 `describe_machine`。
-- `job_*` 操作的是已经存在的任务，不需要令牌。
+- 形如 `build-box:k3f9q2ab`。冒号后是对 (Lane, 机器 ID, 机器 skill 索引哈希) 的 HMAC，取 40 位，用 base32 编码为 8 个字符。密钥保存在 Server 的 SQLite 中，Server 不需要保存任何会话状态。
+- **短而稳定**：机器的 skill 不变时，令牌不变，多次 describe 得到同一个令牌，不会出现多个令牌互相混淆；skill 一变，令牌随之改变。
+- 机器名部分只是方便模型区分，校验时不使用，所以机器改名不会使令牌失效。
+- 令牌不是安全凭据（访问控制由 access key 负责），只用于确认 Agent 看过简报，所以 40 位足够。
 
-已知边界：上下文被压缩后，Agent 可能还保留着令牌，但已经忘了简报内容。这在协议层面无法检测。
+**校验**
+
+- `read_skill`、`exec`、`read_file`、`write_file` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。`job_*` 操作已经存在的任务，不需要令牌。
+- Server 先用自己缓存的机器状态校验；不匹配时向机器获取一次最新简报再校验，以免因为 Server 的缓存落后而误判。
+- 令牌缺失、错误或过时（skill 已变化）时：**不执行任何操作**，直接返回最新简报和当前令牌，形式如下。Agent 阅读后带上新令牌重试一次即可：
+
+  ```
+  Nothing was run on "build-box": its briefing token is unknown, or the machine's skills changed since it was issued.
+  Read this briefing, then repeat the call with briefing "build-box:k3f9q2ab".
+
+  Machine: build-box (linux/amd64), user dev, home /home/dev
+  Shell: zsh (available: bash, zsh, sh)
+  Allows: shared skills yes; commands and file access yes
+  Skills (3); read one with read_skill, run its scripts here with exec and skill set:
+  - deploy-preview: …
+  ```
+
+- `transfer` 两端都需要简报时，在一次返回中给出两台机器的简报。
+
+**效果**
+
+- Agent 忘记令牌（例如上下文被压缩）时，下一次调用会直接收到简报，恢复只需一次重试，并且恰好在它需要时重新了解了这台机器。
+- 子 Agent 没有从主 Agent 拿到令牌时，第一次操作同样会收到简报。
+- 与协议版本无关，新旧客户端行为一致。
 
 ## 9. Server
 
@@ -667,6 +693,8 @@ docs/                      # 设计、管理 API、发布流程
 7. **发布**：GoReleaser、GHCR 镜像、npm 发布、文档
 
 ### v1 之后
+
+- **官方 Skills 扩展（SEP-2640，`io.modelcontextprotocol/skills`）**：在主流宿主支持后评估接入。截至 2026 年 11 月，Claude Code、Codex、Cursor、VS Code 都还不支持，只有调试器和少数客户端部分支持。另外，该扩展默认 skill 在宿主本机使用和执行，没有表达"必须在某台远程机器上执行"的方式；接入时需要设计好执行位置的表达，避免宿主把脚本拿到 Agent 本机执行。
 
 - PTY 与交互式终端（Unix pty / Windows ConPTY）
 - 远程 MCP connector 所需的 OAuth

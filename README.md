@@ -113,7 +113,7 @@ Any MCP client that supports Streamable HTTP works. Pass the access key as `Auth
 | `read_file` / `write_file` | Small inline file operations |
 | `transfer` | Stream a file or directory from one machine to another |
 
-Every tool that touches a machine requires the briefing token from `describe_machine`. This makes the agent look at a machine's environment and skills before using it. If the machine's skills change later, tool results include a notice that tells the agent to describe the machine again.
+Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine`. It makes the agent look at a machine's environment and skills before acting on it. When a call has no valid token (the agent forgot it, or the machine's skills changed), nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step.
 
 ## Managing a machine
 

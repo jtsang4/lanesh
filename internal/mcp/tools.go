@@ -6,7 +6,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/jtsang4/lanesh/internal/auth"
 	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
@@ -28,7 +27,7 @@ type SkillInfo struct {
 
 // DescribeOutput is the machine briefing.
 type DescribeOutput struct {
-	Briefing    string                   `json:"briefing"`
+	Briefing    string                   `json:"briefing" jsonschema:"pass this as briefing in every other call for this machine"`
 	Machine     MachineInfo              `json:"machine"`
 	Environment protocol.Environment     `json:"environment"`
 	Skills      []SkillInfo              `json:"skills"`
@@ -44,12 +43,12 @@ func (t *Tools) describeMachine(ctx context.Context, req *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, DescribeOutput{}, err
 	}
-	var d protocol.DescribeResult
-	if err := t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodDescribe, nil, &d); err != nil {
-		return nil, DescribeOutput{}, protoErr(err)
+	d, err := t.describe(ctx, c, m)
+	if err != nil {
+		return nil, DescribeOutput{}, err
 	}
 	out := DescribeOutput{
-		Briefing: t.briefings.Issue(c.laneID, m.ID, auth.SkillsTag(d.Skills.Hash), t.now()),
+		Briefing: t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash),
 		Machine: MachineInfo{
 			ID: m.ID, Name: m.Name, OS: m.OS, Arch: m.Arch, Online: true,
 			AllowExec: d.Policy.AllowExec, ExposeSkills: d.Policy.ExposeSkills, SkillCount: len(d.Skills.Skills),
@@ -81,31 +80,22 @@ type ReadSkillInput struct {
 	Limit    int64  `json:"limit,omitempty" jsonschema:"maximum bytes to read (default 262144, max 1048576)"`
 }
 
-// ReadSkillOutput is a skill file.
-type ReadSkillOutput struct {
-	protocol.SkillReadResult
-	Notice string `json:"notice,omitempty"`
-}
-
-func (t *Tools) readSkill(ctx context.Context, req *mcp.CallToolRequest, in ReadSkillInput) (*mcp.CallToolResult, ReadSkillOutput, error) {
+func (t *Tools) readSkill(ctx context.Context, req *mcp.CallToolRequest, in ReadSkillInput) (*mcp.CallToolResult, protocol.SkillReadResult, error) {
 	c, err := callerFrom(req)
 	if err != nil {
-		return nil, ReadSkillOutput{}, err
+		return nil, protocol.SkillReadResult{}, err
 	}
-	m, notice, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
 	if err != nil {
-		return nil, ReadSkillOutput{}, err
+		return nil, protocol.SkillReadResult{}, err
 	}
 	if err := requirePolicy(m, false); err != nil {
-		return nil, ReadSkillOutput{}, err
+		return nil, protocol.SkillReadResult{}, err
 	}
 	var res protocol.SkillReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodSkillRead,
 		protocol.SkillReadParams{Skill: in.Skill, Path: in.Path, Offset: in.Offset, Limit: in.Limit}, &res)
-	if err != nil {
-		return nil, ReadSkillOutput{}, protoErr(err)
-	}
-	return nil, ReadSkillOutput{SkillReadResult: res, Notice: notice}, nil
+	return nil, res, protoErr(err)
 }
 
 // --- exec ---
@@ -125,23 +115,17 @@ type ExecInput struct {
 	PTY        bool              `json:"pty,omitempty" jsonschema:"reserved; pseudo-terminals are not supported yet"`
 }
 
-// ExecOutput is a job status.
-type ExecOutput struct {
-	protocol.JobStatus
-	Notice string `json:"notice,omitempty"`
-}
-
-func (t *Tools) exec(ctx context.Context, req *mcp.CallToolRequest, in ExecInput) (*mcp.CallToolResult, ExecOutput, error) {
+func (t *Tools) exec(ctx context.Context, req *mcp.CallToolRequest, in ExecInput) (*mcp.CallToolResult, protocol.JobStatus, error) {
 	c, err := callerFrom(req)
 	if err != nil {
-		return nil, ExecOutput{}, err
+		return nil, protocol.JobStatus{}, err
 	}
-	m, notice, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
 	if err != nil {
-		return nil, ExecOutput{}, err
+		return nil, protocol.JobStatus{}, err
 	}
 	if err := requirePolicy(m, true); err != nil {
-		return nil, ExecOutput{}, err
+		return nil, protocol.JobStatus{}, err
 	}
 	var st protocol.JobStatus
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodExecStart, protocol.ExecParams{
@@ -157,9 +141,9 @@ func (t *Tools) exec(ctx context.Context, req *mcp.CallToolRequest, in ExecInput
 	}
 	t.audit(ctx, c, "exec", m, detail, err)
 	if err != nil {
-		return nil, ExecOutput{}, protoErr(err)
+		return nil, protocol.JobStatus{}, protoErr(err)
 	}
-	return nil, ExecOutput{JobStatus: st, Notice: notice}, nil
+	return nil, st, nil
 }
 
 // --- jobs ---
@@ -283,7 +267,7 @@ func (t *Tools) readFile(ctx context.Context, req *mcp.CallToolRequest, in ReadF
 	if err != nil {
 		return nil, protocol.FileReadResult{}, err
 	}
-	m, _, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.FileReadResult{}, err
 	}
@@ -314,7 +298,7 @@ func (t *Tools) writeFile(ctx context.Context, req *mcp.CallToolRequest, in Writ
 	if err != nil {
 		return nil, protocol.FileWriteResult{}, err
 	}
-	m, _, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.FileWriteResult{}, err
 	}
@@ -345,12 +329,10 @@ func (t *Tools) transfer(ctx context.Context, req *mcp.CallToolRequest, in Trans
 	if err != nil {
 		return nil, protocol.TransferResult{}, err
 	}
-	from, _, err := t.briefed(ctx, c, in.FromMachine, in.FromBriefing)
-	if err != nil {
-		return nil, protocol.TransferResult{}, err
-	}
-	to, _, err := t.briefed(ctx, c, in.ToMachine, in.ToBriefing)
-	if err != nil {
+	// Check both machines so that one reply carries every briefing needed.
+	from, fromErr := t.briefed(ctx, c, in.FromMachine, in.FromBriefing)
+	to, toErr := t.briefed(ctx, c, in.ToMachine, in.ToBriefing)
+	if err := joinBriefings(fromErr, toErr); err != nil {
 		return nil, protocol.TransferResult{}, err
 	}
 	for _, m := range []Machine{from, to} {

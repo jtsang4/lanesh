@@ -25,6 +25,7 @@ type Machine struct {
 	Version    string
 	Online     bool
 	LastSeen   time.Time
+	Shell      string
 	Policy     protocol.Policy
 	SkillCount int
 	SkillsHash string
@@ -35,6 +36,9 @@ type Backend interface {
 	Machines(ctx context.Context, laneID string) ([]Machine, error)
 	Resolve(ctx context.Context, laneID, ref string) (Machine, error)
 	Call(ctx context.Context, laneID, machineID, method string, params, out any) error
+	// UpdateSkills records a skill index just read from a machine, so that
+	// briefing tokens are issued and checked against the same state.
+	UpdateSkills(ctx context.Context, laneID, machineID string, idx protocol.SkillIndex)
 	Transfer(ctx context.Context, laneID string, from, to Machine, fromPath, toPath string, overwrite bool) (protocol.TransferResult, error)
 	Audit(ctx context.Context, e store.AuditEntry)
 }
@@ -45,15 +49,6 @@ const (
 	ExtraLane     = "lane"
 	ExtraKey      = "key"
 )
-
-// Instructions are returned to clients on initialize.
-const Instructions = `Lanesh gives you access to several machines in one lane. Each machine has its own globally installed agent skills, its own shell and its own files.
-
-1. Call list_machines to see which machines exist and which are online.
-2. Before using a machine, call describe_machine for it. It returns the machine's environment, what it allows, its installed skills, and a briefing token. Every other tool that touches that machine requires the briefing token, so describe a machine before working with it.
-3. Skills live on the machine where they are installed. Read them with read_skill. When a skill tells you to run a script, run it on that same machine with exec, passing skill so that the working directory is the skill directory. Use the machine's shell syntax (see describe_machine).
-4. Files are not shared between machines. Use transfer to copy files or directories from one machine to another; use read_file and write_file only for small files.
-5. Long-running commands keep running in the background after exec returns; follow them with job_read and stop them with job_kill.`
 
 type caller struct {
 	laneID string
@@ -81,14 +76,14 @@ func callerFrom(req *mcp.CallToolRequest) (caller, error) {
 type Tools struct {
 	backend   Backend
 	briefings *auth.Briefings
-	now       func() time.Time
 }
 
 // NewServer builds the MCP server with all tools registered.
-func NewServer(b Backend, briefings *auth.Briefings) *mcp.Server {
-	t := &Tools{backend: b, briefings: briefings, now: time.Now}
+// instructions should come from [Instructions].
+func NewServer(b Backend, briefings *auth.Briefings, instructions string) *mcp.Server {
+	t := &Tools{backend: b, briefings: briefings}
 	s := mcp.NewServer(&mcp.Implementation{Name: "lanesh", Title: "Lanesh", Version: version.Version}, &mcp.ServerOptions{
-		Instructions: Instructions,
+		Instructions: instructions,
 	})
 	t.register(s)
 	return s
@@ -103,7 +98,8 @@ func (t *Tools) register(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "describe_machine",
 		Description: "Describe a machine: its OS, shell, home directory, what it allows, and its installed global skills (name and description). " +
-			"Returns a briefing token that the other machine tools require. Call this before using a machine, and again when told its skills changed.",
+			"Returns a short briefing token such as \"build-box:k3f9q2ab\" that every other tool touching this machine requires. " +
+			"The token stays the same until the machine's skills change.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, t.describeMachine)
 	mcp.AddTool(s, &mcp.Tool{
@@ -227,22 +223,45 @@ func (t *Tools) online(ctx context.Context, c caller, ref string) (Machine, erro
 	return m, nil
 }
 
-// briefed resolves an online machine and verifies the caller's briefing token.
-// The returned notice is non-empty when the machine's skills changed since.
-func (t *Tools) briefed(ctx context.Context, c caller, ref, briefing string) (Machine, string, error) {
+// briefed resolves an online machine and checks the caller's briefing token
+// against the machine's current state. When the token is missing, unknown or
+// outdated, nothing runs: the error carries a fresh briefing and token so that
+// the agent can read it and repeat the call.
+func (t *Tools) briefed(ctx context.Context, c caller, ref, token string) (Machine, error) {
 	m, err := t.online(ctx, c, ref)
 	if err != nil {
-		return Machine{}, "", err
+		return Machine{}, err
 	}
-	b, err := t.briefings.Verify(c.laneID, m.ID, briefing)
+	if t.briefings.Valid(c.laneID, m.ID, m.SkillsHash, token) {
+		return m, nil
+	}
+	// The server's view of the machine may lag behind; ask the machine itself.
+	d, err := t.describe(ctx, c, m)
 	if err != nil {
-		return Machine{}, "", fmt.Errorf("machine %q has not been described in this conversation: call describe_machine(%q) first and pass its briefing token", m.Name, m.Name)
+		return Machine{}, err
 	}
-	notice := ""
-	if b.SkillsTag != auth.SkillsTag(m.SkillsHash) {
-		notice = fmt.Sprintf("The skills installed on %q changed since you described it. Call describe_machine(%q) again to refresh.", m.Name, m.Name)
+	m.SkillsHash, m.Policy = d.Skills.Hash, d.Policy
+	if t.briefings.Valid(c.laneID, m.ID, m.SkillsHash, token) {
+		return m, nil
 	}
-	return m, notice, nil
+	reason := "no briefing token was given"
+	if strings.TrimSpace(token) != "" {
+		reason = "its briefing token is unknown, or the machine's skills changed since it was issued"
+	}
+	return Machine{}, &BriefingRequired{
+		Machine: m.Name,
+		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason),
+	}
+}
+
+// describe fetches a machine's briefing and records its skill index.
+func (t *Tools) describe(ctx context.Context, c caller, m Machine) (protocol.DescribeResult, error) {
+	var d protocol.DescribeResult
+	if err := t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodDescribe, nil, &d); err != nil {
+		return d, protoErr(err)
+	}
+	t.backend.UpdateSkills(ctx, c.laneID, m.ID, d.Skills)
+	return d, nil
 }
 
 func requirePolicy(m Machine, exec bool) error {

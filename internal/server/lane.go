@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -163,7 +164,7 @@ type backend struct{ s *Server }
 func toMCP(v MachineView) mcp.Machine {
 	return mcp.Machine{
 		ID: v.ID, Name: v.Name, OS: v.OS, Arch: v.Arch, Version: v.Version, Online: v.Online, LastSeen: v.LastSeen,
-		Policy: v.Policy, SkillCount: v.SkillCount, SkillsHash: v.SkillsHash,
+		Shell: v.Environment.DefaultShell, Policy: v.Policy, SkillCount: v.SkillCount, SkillsHash: v.SkillsHash,
 	}
 }
 
@@ -194,10 +195,50 @@ func (b backend) Transfer(ctx context.Context, laneID string, from, to mcp.Machi
 
 func (b backend) Audit(ctx context.Context, e store.AuditEntry) { b.s.audit(ctx, e) }
 
+func (b backend) UpdateSkills(ctx context.Context, laneID, machineID string, idx protocol.SkillIndex) {
+	if c := b.s.hub.Get(laneID, machineID); c != nil {
+		c.setSkills(idx)
+	}
+	_ = b.s.store.SaveSkills(context.WithoutCancel(ctx), laneID, machineID, idx)
+}
+
+// laneServers caches one MCP server per lane, rebuilt when the lane's
+// instructions (which include its machine roster) change.
+type laneServers struct {
+	mu      sync.Mutex
+	servers map[string]laneServer
+}
+
+type laneServer struct {
+	instructions string
+	server       *sdkmcp.Server
+}
+
+// mcpServer returns the MCP server for a lane, with instructions describing
+// the lane as it is now.
+func (s *Server) mcpServer(r *http.Request) *sdkmcp.Server {
+	laneID := r.PathValue("lane")
+	var machines []mcp.Machine
+	if views, err := s.machineViews(r.Context(), laneID); err == nil {
+		for _, v := range views {
+			machines = append(machines, toMCP(v))
+		}
+	}
+	instructions := mcp.Instructions(machines)
+
+	s.lanes.mu.Lock()
+	defer s.lanes.mu.Unlock()
+	if ls, ok := s.lanes.servers[laneID]; ok && ls.instructions == instructions {
+		return ls.server
+	}
+	srv := mcp.NewServer(backend{s}, s.briefings, instructions)
+	s.lanes.servers[laneID] = laneServer{instructions: instructions, server: srv}
+	return srv
+}
+
 // mcpHandler serves the MCP endpoint, authenticating access keys per lane.
 func (s *Server) mcpHandler() http.Handler {
-	server := mcp.NewServer(backend{s}, s.briefings)
-	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{
+	handler := sdkmcp.NewStreamableHTTPHandler(s.mcpServer, &sdkmcp.StreamableHTTPOptions{
 		SessionTimeout: 24 * time.Hour,
 		// Requests are authenticated with access keys, and deployments commonly
 		// sit behind a reverse proxy on the same host.

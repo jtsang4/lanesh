@@ -43,6 +43,7 @@ type Server struct {
 	started   time.Time
 	limiter   *limiter
 	mcp       http.Handler
+	lanes     laneServers
 }
 
 // New opens the store and prepares the server. It returns the generated
@@ -63,6 +64,7 @@ func newWithStore(ctx context.Context, cfg Config, st *store.Store) (*Server, st
 	s := &Server{
 		cfg: cfg, store: st, hub: NewHub(), briefings: auth.NewBriefings(secret),
 		transfers: newTransfers(cfg.TransferMaxBytes), started: time.Now(), limiter: newLimiter(10, time.Minute),
+		lanes: laneServers{servers: map[string]laneServer{}},
 	}
 	generated, err := s.initAdminToken(ctx)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -227,13 +228,31 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("machines = %v", list)
 	}
 
-	// Tools refuse to touch a machine before it has been described.
-	if _, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": "", "command": "echo hi"}); !strings.Contains(errText, "describe_machine") {
+	// The instructions carry the usage essentials and a roster of the lane.
+	instr := s.InitializeResult().Instructions
+	if len(instr) > 2048 || !strings.Contains(instr[:min(512, len(instr))], "briefing") ||
+		!strings.Contains(instr, "- alpha: ") || !strings.Contains(instr, "no exec") {
+		t.Fatalf("instructions (%d chars):\n%s", len(instr), instr)
+	}
+
+	// Without a briefing token nothing runs; the reply is the briefing itself.
+	_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": "", "command": "echo hi"})
+	if !strings.Contains(errText, `Nothing was run on "alpha"`) || !strings.Contains(errText, "- deploy: The deploy skill") {
 		t.Fatalf("exec without briefing: %q", errText)
+	}
+	offered := regexp.MustCompile(`briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)
+	if offered == nil {
+		t.Fatalf("no token offered: %q", errText)
 	}
 
 	da := mustCall(t, s, "describe_machine", map[string]any{"machine": "alpha"})
 	briefA := da["briefing"].(string)
+	if briefA != offered[1] {
+		t.Fatalf("describe token %q differs from the offered one %q", briefA, offered[1])
+	}
+	if again := mustCall(t, s, "describe_machine", map[string]any{"machine": "alpha"}); again["briefing"] != briefA {
+		t.Fatal("briefing tokens must be stable while the machine is unchanged")
+	}
 	if skills := da["skills"].([]any); len(skills) != 2 {
 		t.Fatalf("alpha skills = %v", skills)
 	}
@@ -241,8 +260,16 @@ func TestEndToEnd(t *testing.T) {
 	briefB := db["briefing"].(string)
 
 	// A briefing for one machine does not unlock another.
-	if _, errText := call(t, s, "exec", map[string]any{"machine": "beta", "briefing": briefA, "command": "echo hi"}); errText == "" {
-		t.Fatal("briefing of alpha must not work for beta")
+	if _, errText := call(t, s, "exec", map[string]any{"machine": "beta", "briefing": briefA, "command": "echo hi"}); !strings.Contains(errText, "unknown") {
+		t.Fatalf("briefing of alpha used for beta: %q", errText)
+	}
+
+	// A transfer with two missing tokens returns both briefings at once.
+	_, errText = call(t, s, "transfer", map[string]any{
+		"from_machine": "alpha", "from_briefing": "", "from_path": "x", "to_machine": "beta", "to_briefing": "", "to_path": "y",
+	})
+	if !strings.Contains(errText, `Nothing was run on "alpha"`) || !strings.Contains(errText, `Nothing was run on "beta"`) {
+		t.Fatalf("transfer briefings: %q", errText)
 	}
 
 	sk := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy"})
@@ -331,19 +358,23 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("gamma exec: %q", errText)
 	}
 
-	// Installing a skill is noticed, and stale briefings get a notice.
+	// Once the machine's skills change, the old token yields a fresh briefing
+	// that lists the new skill, and the new token works.
 	writeSkill(t, a.home, "fresh")
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		out := mustCall(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("true", "$null")})
-		if n, _ := out["notice"].(string); strings.Contains(n, "changed") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no notice after skills changed")
+	var fresh string
+	for deadline := time.Now().Add(15 * time.Second); fresh == ""; {
+		_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("true", "$null")})
+		if strings.Contains(errText, "- fresh: The fresh skill") {
+			fresh = regexp.MustCompile(`briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)[1]
+		} else if time.Now().After(deadline) {
+			t.Fatalf("old token still accepted after the skills changed: %q", errText)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	if fresh == briefA {
+		t.Fatal("token must change with the skills")
+	}
+	mustCall(t, s, "exec", map[string]any{"machine": "alpha", "briefing": fresh, "command": shellCmd("true", "$null")})
 
 	// Admin views.
 	var laneSkills []LaneSkill
