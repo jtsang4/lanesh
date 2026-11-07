@@ -39,13 +39,14 @@ make lint    # golangci-lint and web lint
 
 - Svelte 5 runes and SvelteKit with `adapter-static`; the UI is a client-rendered SPA served by the Go server.
 - Use the project skills `svelte-code-writer` and `svelte-core-bestpractices` when writing Svelte code.
+- Tooling comes from the Vite/VoidZero ecosystem: `oxlint` for linting and `oxfmt` for formatting (`pnpm run lint`, `pnpm run format`); `svelte-check` covers Svelte compiler diagnostics and types.
 - Visual direction: minimal and flat, refined through typography, spacing and detail. Avoid oversized buttons and poster-style hero sections.
 - Quality bar: work at the level of Awwwards, Webby or FWA winners. After each iteration, screenshot the UI in a browser, review it against the checklist in `docs/design.md` §10.4, and keep improving until it meets that bar.
 - English is the default UI language; Simplified Chinese is provided through i18n.
 
 ### Dependencies
 
-- Keep dependencies on their latest versions within compatibility limits. TypeScript stays on 6.x until SvelteKit, svelte-check and typescript-eslint support 7.x.
+- Keep dependencies on their latest versions within compatibility limits. TypeScript stays on 6.x until SvelteKit and svelte-check support 7.x.
 - Dependabot opens weekly update PRs for Go modules, web packages, GitHub Actions and the Docker base image.
 
 ### Skills
