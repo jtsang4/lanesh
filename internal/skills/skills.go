@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,22 +14,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"go.yaml.in/yaml/v4"
 
+	"github.com/jtsang4/lanesh/internal/files"
 	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
 // SkillFile is the file that marks a directory as a skill.
 const SkillFile = "SKILL.md"
 
-// Limits that keep scanning and reading cheap.
+// Limits that keep scanning cheap.
 const (
-	maxHashFiles    = 2000
-	maxTreeEntries  = 500
-	DefaultReadSize = 256 << 10
-	MaxReadSize     = 1 << 20
+	maxHashFiles   = 2000
+	maxTreeEntries = 500
 )
 
 // skipDirs are never descended into when hashing or listing a skill.
@@ -200,7 +197,7 @@ func hashFile(p string) string {
 }
 
 // ErrNotFound is returned when a skill or file does not exist.
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = files.ErrNotFound
 
 // ErrOutside is returned for paths that escape the skill directory.
 var ErrOutside = errors.New("path is outside the skill directory")
@@ -231,7 +228,7 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 	if !filepath.IsLocal(rel) {
 		return protocol.SkillReadResult{}, ErrOutside
 	}
-	res, err := ReadFile(filepath.Join(s.Path, rel), p.Offset, p.Limit, "")
+	res, err := files.ReadFile(filepath.Join(s.Path, rel), p.Offset, p.Limit, "")
 	if err != nil {
 		return protocol.SkillReadResult{}, err
 	}
@@ -275,70 +272,4 @@ func Tree(dir string) []protocol.FileEntry {
 		return nil
 	})
 	return out
-}
-
-// ReadFile reads up to limit bytes of path from offset. Text is returned as
-// UTF-8; binary content (or encoding "base64") as base64.
-func ReadFile(path string, offset, limit int64, encoding string) (protocol.FileReadResult, error) {
-	if limit <= 0 {
-		limit = DefaultReadSize
-	}
-	if limit > MaxReadSize {
-		limit = MaxReadSize
-	}
-	f, err := os.Open(path) //nolint:gosec // Callers validate the path.
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return protocol.FileReadResult{}, fmt.Errorf("%s: %w", path, ErrNotFound)
-		}
-		return protocol.FileReadResult{}, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return protocol.FileReadResult{}, err
-	}
-	if info.IsDir() {
-		return protocol.FileReadResult{}, fmt.Errorf("%s is a directory", path)
-	}
-	if offset < 0 || offset > info.Size() {
-		offset = 0
-	}
-	buf := make([]byte, limit)
-	n, err := f.ReadAt(buf, offset)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return protocol.FileReadResult{}, err
-	}
-	data := buf[:n]
-	res := protocol.FileReadResult{
-		Path: path, Size: info.Size(), Offset: offset,
-		Truncated: offset+int64(n) < info.Size(),
-	}
-	if encoding != protocol.EncodingBase64 && isText(data) {
-		res.Content, res.Encoding = string(trimPartialRune(data, res.Truncated)), protocol.EncodingUTF8
-	} else {
-		res.Content, res.Encoding = base64.StdEncoding.EncodeToString(data), protocol.EncodingBase64
-	}
-	return res, nil
-}
-
-func isText(b []byte) bool {
-	if bytes.IndexByte(b, 0) >= 0 {
-		return false
-	}
-	// Allow a rune cut at the end of a partial read.
-	for i := 0; i < utf8.UTFMax && len(b) > 0 && !utf8.Valid(b); i++ {
-		b = b[:len(b)-1]
-	}
-	return utf8.Valid(b)
-}
-
-func trimPartialRune(b []byte, truncated bool) []byte {
-	if !truncated {
-		return b
-	}
-	for i := 0; i < utf8.UTFMax && len(b) > 0 && !utf8.Valid(b); i++ {
-		b = b[:len(b)-1]
-	}
-	return b
 }
