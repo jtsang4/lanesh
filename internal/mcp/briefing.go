@@ -44,12 +44,15 @@ func yesNo(b bool) string {
 	return "no"
 }
 
-// renderBriefing formats a machine briefing for an agent.
-func renderBriefing(m Machine, d protocol.DescribeResult, token, reason string) string {
+// renderBriefing formats a machine briefing for an agent. The first lines say
+// what happened and exactly how to retry, because models act on them; the
+// briefing below is the same information describe_machine returns.
+func renderBriefing(m Machine, d protocol.DescribeResult, token, reason, tool, param string) string {
 	var b strings.Builder
 	env := d.Environment
 	fmt.Fprintf(&b, "Nothing was run on %q: %s.\n", m.Name, reason)
-	fmt.Fprintf(&b, "Read this briefing, then repeat the call with briefing %q.\n\n", token)
+	fmt.Fprintf(&b, "Next step: read the briefing below, then repeat the same %s call with %s %q. "+
+		"This reply already is the machine's full briefing, so do not call describe_machine for it.\n\n", tool, param, token)
 	fmt.Fprintf(&b, "Machine: %s (%s/%s), user %s, home %s\n", m.Name, env.OS, env.Arch, env.User, env.Home)
 	fmt.Fprintf(&b, "Shell: %s", env.DefaultShell)
 	if len(env.Shells) > 0 {
@@ -84,7 +87,7 @@ const (
 // instructionsHead must stay within 512 characters.
 const instructionsHead = `Lanesh connects you to the machines of one lane; each has its own skills, shell and files.
 1. describe_machine(machine) returns a machine's environment, skills and briefing token.
-2. Pass that token as briefing in every other call for that machine. If a call returns a briefing instead of a result, nothing ran: read it and repeat the call with the new token.
+2. Pass that token as briefing in every other call for that machine. If a call returns a briefing instead of a result, nothing ran: retry the same call with the token it gives, without describing again.
 3. Run a skill's scripts on the machine that has it: exec with skill set.
 4. Files are not shared: use transfer between machines.`
 

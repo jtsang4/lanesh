@@ -45,8 +45,8 @@ func TestRenderBriefingAndJoin(t *testing.T) {
 			Shadowed: []protocol.ShadowedSkill{{Name: "pdf", Source: "claude"}},
 		},
 	}
-	text := renderBriefing(Machine{Name: "mac"}, d, "mac:abcdefgh", "no briefing token was given")
-	for _, want := range []string{`Nothing was run on "mac"`, `briefing "mac:abcdefgh"`, "Shell: zsh (available: bash, zsh)", "- deploy: Deploy things", "pdf (claude)"} {
+	text := renderBriefing(Machine{Name: "mac"}, d, "mac:abcdefgh", "no briefing token was given", "transfer", "to_briefing")
+	for _, want := range []string{`Nothing was run on "mac"`, `repeat the same transfer call with to_briefing "mac:abcdefgh"`, "do not call describe_machine", "Shell: zsh (available: bash, zsh)", "- deploy: Deploy things", "pdf (claude)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

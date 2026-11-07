@@ -391,11 +391,11 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 - `read_skill`、`exec`、`read_file`、`write_file` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。`job_*` 操作已经存在的任务，不需要令牌。
 - Server 先用自己缓存的机器状态校验；不匹配时向机器获取一次最新简报再校验，以免因为 Server 的缓存落后而误判。
-- 令牌缺失、错误或过时（skill 已变化）时：**不执行任何操作**，直接返回最新简报和当前令牌，形式如下。Agent 阅读后带上新令牌重试一次即可：
+- 令牌缺失、错误或过时（skill 已变化）时：**不执行任何操作**，直接返回最新简报和当前令牌，形式如下。开头一行写明下一步动作：用哪个工具、哪个参数（`transfer` 是 `from_briefing` / `to_briefing`）、哪个令牌重试，并说明不需要再调用 `describe_machine`。Agent 阅读后重试一次即可：
 
   ```
   Nothing was run on "build-box": its briefing token is unknown, or the machine's skills changed since it was issued.
-  Read this briefing, then repeat the call with briefing "build-box:k3f9q2ab".
+  Next step: read the briefing below, then repeat the same exec call with briefing "build-box:k3f9q2ab". This reply already is the machine's full briefing, so do not call describe_machine for it.
 
   Machine: build-box (linux/amd64), user dev, home /home/dev
   Shell: zsh (available: bash, zsh, sh)

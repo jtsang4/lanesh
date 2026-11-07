@@ -85,7 +85,7 @@ func (t *Tools) readSkill(ctx context.Context, req *mcp.CallToolRequest, in Read
 	if err != nil {
 		return nil, protocol.SkillReadResult{}, err
 	}
-	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, "read_skill", "briefing", in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.SkillReadResult{}, err
 	}
@@ -120,7 +120,7 @@ func (t *Tools) exec(ctx context.Context, req *mcp.CallToolRequest, in ExecInput
 	if err != nil {
 		return nil, protocol.JobStatus{}, err
 	}
-	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, "exec", "briefing", in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.JobStatus{}, err
 	}
@@ -267,7 +267,7 @@ func (t *Tools) readFile(ctx context.Context, req *mcp.CallToolRequest, in ReadF
 	if err != nil {
 		return nil, protocol.FileReadResult{}, err
 	}
-	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, "read_file", "briefing", in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.FileReadResult{}, err
 	}
@@ -298,7 +298,7 @@ func (t *Tools) writeFile(ctx context.Context, req *mcp.CallToolRequest, in Writ
 	if err != nil {
 		return nil, protocol.FileWriteResult{}, err
 	}
-	m, err := t.briefed(ctx, c, in.Machine, in.Briefing)
+	m, err := t.briefed(ctx, c, "write_file", "briefing", in.Machine, in.Briefing)
 	if err != nil {
 		return nil, protocol.FileWriteResult{}, err
 	}
@@ -330,8 +330,8 @@ func (t *Tools) transfer(ctx context.Context, req *mcp.CallToolRequest, in Trans
 		return nil, protocol.TransferResult{}, err
 	}
 	// Check both machines so that one reply carries every briefing needed.
-	from, fromErr := t.briefed(ctx, c, in.FromMachine, in.FromBriefing)
-	to, toErr := t.briefed(ctx, c, in.ToMachine, in.ToBriefing)
+	from, fromErr := t.briefed(ctx, c, "transfer", "from_briefing", in.FromMachine, in.FromBriefing)
+	to, toErr := t.briefed(ctx, c, "transfer", "to_briefing", in.ToMachine, in.ToBriefing)
 	if err := joinBriefings(fromErr, toErr); err != nil {
 		return nil, protocol.TransferResult{}, err
 	}

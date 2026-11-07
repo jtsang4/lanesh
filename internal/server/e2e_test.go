@@ -240,7 +240,7 @@ func TestEndToEnd(t *testing.T) {
 	if !strings.Contains(errText, `Nothing was run on "alpha"`) || !strings.Contains(errText, "- deploy: The deploy skill") {
 		t.Fatalf("exec without briefing: %q", errText)
 	}
-	offered := regexp.MustCompile(`briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)
+	offered := regexp.MustCompile(`with briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)
 	if offered == nil {
 		t.Fatalf("no token offered: %q", errText)
 	}
@@ -365,7 +365,7 @@ func TestEndToEnd(t *testing.T) {
 	for deadline := time.Now().Add(15 * time.Second); fresh == ""; {
 		_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("true", "$null")})
 		if strings.Contains(errText, "- fresh: The fresh skill") {
-			fresh = regexp.MustCompile(`briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)[1]
+			fresh = regexp.MustCompile(`with briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)[1]
 		} else if time.Now().After(deadline) {
 			t.Fatalf("old token still accepted after the skills changed: %q", errText)
 		}

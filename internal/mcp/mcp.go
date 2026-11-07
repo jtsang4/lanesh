@@ -227,7 +227,10 @@ func (t *Tools) online(ctx context.Context, c caller, ref string) (Machine, erro
 // against the machine's current state. When the token is missing, unknown or
 // outdated, nothing runs: the error carries a fresh briefing and token so that
 // the agent can read it and repeat the call.
-func (t *Tools) briefed(ctx context.Context, c caller, ref, token string) (Machine, error) {
+//
+// tool and param name the call and its token parameter, so that the reply can
+// say exactly how to retry.
+func (t *Tools) briefed(ctx context.Context, c caller, tool, param, ref, token string) (Machine, error) {
 	m, err := t.online(ctx, c, ref)
 	if err != nil {
 		return Machine{}, err
@@ -250,7 +253,7 @@ func (t *Tools) briefed(ctx context.Context, c caller, ref, token string) (Machi
 	}
 	return Machine{}, &BriefingRequired{
 		Machine: m.Name,
-		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason),
+		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason, tool, param),
 	}
 }
 
