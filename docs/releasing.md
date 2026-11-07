@@ -32,7 +32,7 @@ trusted publishing 只能在 npmjs.com 上**已经存在的包**的设置页中�
    ```sh
    cd build/npm
    npm version <version> --no-git-tag-version   # 例如 0.1.0，不带 v
-   npm publish --access public
+   npm publish --access public --provenance=false   # provenance 只能在 CI 中生成
    git checkout package.json                    # 不提交版本号改动
    ```
 
@@ -41,8 +41,11 @@ trusted publishing 只能在 npmjs.com 上**已经存在的包**的设置页中�
    - Repository：`lanesh`
    - Workflow filename：`release.yml`
    - Environment name：留空
+   - Allowed actions：勾选 **Allow npm publish**（不勾选时只允许 `npm stage publish`，而工作流使用的是直接发布）；`npm dist-tag` 不需要
 4. **注意有效期**：新建的 trusted publisher 配置必须在 **2 天内**完成一次成功发布，否则会过期，只能删除后重建。所以建议在准备发下一个版本之前再做第 3 步，或者配置好后尽快发一个补丁版本。
-5. 确认自动发布正常后，在包设置中选择 **Require two-factor authentication and disallow tokens**，禁止使用传统 token 发布。
+5. 确认自动发布正常后，在包设置中选择 **Require two-factor authentication and disallow bypass 2fa tokens**，禁止使用传统 token 发布。
+
+> 本仓库已经完成以上设置：`lanesh` 包已存在，trusted publisher 指向 `jtsang4/lanesh` 的 `release.yml`。
 
 要求：npm CLI ≥ 11.5.1、Node ≥ 22.14.0。工作流使用 Node LTS，并在发布前升级到最新版 npm。
 
