@@ -449,15 +449,16 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 
 - SvelteKit + `adapter-static`（SPA）+ TypeScript，Svelte 5。
 - 样式使用 CSS 变量定义设计令牌，不引入重型组件库。
+- 代码检查与格式化使用 Vite/VoidZero 生态的 `oxlint` 和 `oxfmt`；Svelte 编译器诊断和类型检查由 `svelte-check` 负责。
 - 国际化：英文为默认，同时提供简体中文。
 - 开发时使用 Vite 开发服务器，把 `/api`、`/lanes` 代理到本地 Go Server。
 - 项目中的 Svelte 相关 skill 放在 `.agents/skills/`，`.claude/skills/` 下创建指向它们的符号链接。
 
 ### 10.3 嵌入方式
 
-- `web/embed.go` 用 `//go:embed all:build` 把前端构建产物编进二进制，单二进制即可提供完整服务。
+- 前端构建输出到 `web/build/app/`，`web/embed.go` 用 `//go:embed all:build` 把它编进二进制，单二进制即可提供完整服务。
 - `go:embed` 不能引用上级目录，所以嵌入代码必须放在 `web/` 包内，由 Server 引用。
-- 仓库中保留 `web/build/` 的占位文件，确保未构建前端时（例如 `go install`）也能编译；此时 UI 显示“界面未构建”的提示页。
+- 仓库中保留 `web/build/.gitkeep`，确保未构建前端时（例如 `go install`）也能编译；此时 UI 显示“界面未构建”的提示页。构建工具只清理 `web/build/app/`，不会删掉这个占位文件。
 - 代价只是二进制体积增加几 MB，以及修改前端后需要重新编译 Go 程序，这两点都可以接受。
 
 ### 10.4 视觉与品质标准
@@ -476,14 +477,14 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 | npm | `npm i -g lanesh` 或 `npx lanesh ...` |
 | 安装脚本（Unix） | `curl -fsSL https://<server>/install.sh \| sh` |
 | 安装脚本（Windows） | `irm https://<server>/install.ps1 \| iex` |
-| 手动 | 从 GitHub Releases 下载对应平台的压缩包 |
+| 手动 | 从 GitHub Releases 下载对应平台的压缩包或独立二进制 |
 
 所有途径最终都把二进制放到 `~/.lanesh/bin/`。
 
 ### 11.2 npm 包
 
 - 只发布一个包 `lanesh`，内容是一个很小的 JS 启动器，不包含二进制，也不使用 postinstall。
-- 运行时：如果受管二进制不存在，或版本低于 npm 包的版本，就从 GitHub Releases 下载与 npm 包版本相同的二进制，校验 `checksums.txt` 中的 sha256 后放入 `~/.lanesh/bin/`；如果受管二进制版本更高（已经自动升级过），直接使用它。然后把参数原样转交给它执行。
+- 运行时：如果受管二进制不存在，或版本低于 npm 包的版本，就从 GitHub Releases 下载与 npm 包版本相同的独立二进制（`lanesh_<version>_<os>_<arch>[.exe]`，无需解压），校验 `checksums.txt` 中的 sha256 后放入 `~/.lanesh/bin/`；如果受管二进制版本更高（已经自动升级过），直接使用它。然后把参数原样转交给它执行。
 - 这样可以兼容 `--ignore-scripts` 和 `npx`，并且二进制的升级不会与 npm 的文件管理冲突。
 
 ### 11.3 后台服务
@@ -505,7 +506,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - 守护进程在每次握手（`welcome`）时获得 Server 版本，此外每 6 小时检查一次。
 - 目标版本 = 所有已连接 Server 中最高的正式版本（不含预发布或开发版本）。只升级，不自动降级。
 - 目标版本高于当前版本时：
-  1. 从 `https://github.com/jtsang4/lanesh/releases/download/v<version>/` 下载对应平台的压缩包和 `checksums.txt`（直接下载链接，不走 GitHub API，没有限流问题）
+  1. 从 `https://github.com/jtsang4/lanesh/releases/download/v<version>/` 下载对应平台的独立二进制 `lanesh_<version>_<os>_<arch>[.exe]` 和 `checksums.txt`（直接下载链接，不走 GitHub API，没有限流问题）
   2. 校验 sha256
   3. 原子替换 `~/.lanesh/bin/lanesh`。Windows 上不能覆盖正在运行的 exe，所以先把当前文件改名为 `.old`，再放入新文件，下次启动时删除 `.old`
   4. 退出进程，由服务管理器重新拉起
@@ -537,7 +538,8 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 ### 12.1 容器镜像
 
 - 发布到 `ghcr.io/jtsang4/lanesh`，标签为 `<version>`、`<major>.<minor>` 和 `latest`，支持 `linux/amd64` 和 `linux/arm64`。
-- 基础镜像使用 distroless static（非 root）。健康检查通过 `HEALTHCHECK CMD ["lanesh", "healthcheck"]` 实现，不依赖镜像中的 curl 或 wget。
+- 基础镜像使用 distroless static（非 root，UID 65532），镜像中只有一个二进制。`/data` 由 `WORKDIR` 创建并归属该用户，新建的命名卷可以直接写入；如果改用宿主机目录挂载，需要先把目录属主设为 65532。
+- 健康检查通过 `HEALTHCHECK CMD ["lanesh", "healthcheck"]` 实现，不依赖镜像中的 curl 或 wget。
 - 数据目录 `/data` 需要挂载持久卷。
 
 ```yaml
@@ -570,14 +572,14 @@ LANESH_PUBLIC_URL=https://lanesh.example.com lanesh server
 ## 13. 构建与发布
 
 - **触发**：推送 `v*` 标签。
-- **前端**：先构建 `web/`，产物进入 `web/build/`，供 `go:embed` 使用。
+- **前端**：先构建 `web/`，产物进入 `web/build/app/`，供 `go:embed` 使用。
 - **GoReleaser**：
   - 构建 `darwin`、`linux`、`windows` × `amd64`、`arm64`，`CGO_ENABLED=0`
-  - 产出压缩包（Windows 为 zip）和 `checksums.txt`，发布到 GitHub Releases
+  - 产出压缩包（Windows 为 zip）、独立二进制（供 npm 启动器、安装脚本和自动升级使用）和 `checksums.txt`，发布到 GitHub Releases
   - 构建多架构镜像，推送到 GHCR
-- **npm**：独立 job，把启动器包的版本设为标签版本后发布。
+- **npm**：独立 job，把启动器包的版本设为标签版本后，通过 npm trusted publishing（GitHub Actions OIDC，无需长期 token）发布，并自动生成 provenance。预发布版本（标签含 `-`）发布到 `next` dist-tag。具体步骤见 `docs/releasing.md`。
 - **版本注入**：通过 `-ldflags` 注入版本号、提交哈希和构建时间。
-- **CI**：每个 PR 运行 Go 测试（三个平台）、前端检查与构建、`go vet` 和 lint。
+- **CI**：每个 PR 运行 Go 测试（三个平台）、`go vet`、golangci-lint、前端检查与构建、npm 启动器测试、GoReleaser 配置检查，并用快照构建镜像后实际启动容器做冒烟测试。
 
 ## 14. 项目结构
 
