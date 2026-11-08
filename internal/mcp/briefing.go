@@ -202,67 +202,33 @@ const instructionsHead = `Lanesh connects you to the machines of one lane, each 
 - Results end with "` + EndMarker + `"; if it is missing, your client cut the output: read less at once.`
 
 // Instructions builds the server instructions for a lane: usage first, then a
-// roster of its machines and the names of its projects as of connection time.
-func Instructions(machines []Machine, projects []string) string {
+// roster of its machines as of connection time.
+func Instructions(machines []Machine) string {
 	var b strings.Builder
 	b.WriteString(instructionsHead)
-	// Leave room for the project line, which is short.
-	budget := maxInstructions - projectsLine(projects, 200)
 	if len(machines) == 0 {
 		b.WriteString("\n\nThis lane has no machines yet.")
-	} else {
-		b.WriteString("\n\nMachines at connection time (list_machines for now):")
-		for i, m := range machines {
-			line := fmt.Sprintf("\n- %s: %s/%s", m.Name, m.OS, m.Arch)
-			if m.Shell != "" {
-				line += ", " + m.Shell
-			}
-			line += ", " + plural(m.SkillCount, "skill", "skills")
-			if !m.Policy.AllowExec {
-				line += ", no exec"
-			}
-			if !m.Online {
-				line += ", offline"
-			}
-			more := fmt.Sprintf("\n- and %d more (see list_machines)", len(machines)-i)
-			if b.Len()+len(line)+len(more) > budget {
-				b.WriteString(more)
-				break
-			}
-			b.WriteString(line)
-		}
+		return b.String()
 	}
-	if len(projects) > 0 {
-		b.WriteString(projectsLineText(projects, maxInstructions-b.Len()))
+	b.WriteString("\n\nMachines at connection time (list_machines for now):")
+	for i, m := range machines {
+		line := fmt.Sprintf("\n- %s: %s/%s", m.Name, m.OS, m.Arch)
+		if m.Shell != "" {
+			line += ", " + m.Shell
+		}
+		line += ", " + plural(m.SkillCount, "skill", "skills")
+		if !m.Policy.AllowExec {
+			line += ", no exec"
+		}
+		if !m.Online {
+			line += ", offline"
+		}
+		more := fmt.Sprintf("\n- and %d more (see list_machines)", len(machines)-i)
+		if b.Len()+len(line)+len(more) > maxInstructions {
+			b.WriteString(more)
+			break
+		}
+		b.WriteString(line)
 	}
 	return b.String()
-}
-
-// projectsLine returns the length of the project line, capped at limit.
-func projectsLine(projects []string, limit int) int {
-	if len(projects) == 0 {
-		return 0
-	}
-	return min(len(projectsLineText(projects, limit)), limit)
-}
-
-// projectsLineText names the lane's projects within room characters.
-func projectsLineText(projects []string, room int) string {
-	const head = "\n\nProjects (when the user names one, read it with get_project): "
-	line := head
-	for i, name := range projects {
-		sep := ""
-		if i > 0 {
-			sep = ", "
-		}
-		more := fmt.Sprintf(", and %d more", len(projects)-i)
-		if len(line)+len(sep)+len(name)+len(more) > room {
-			if i == 0 {
-				return head + fmt.Sprintf("%d (see get_project)", len(projects))
-			}
-			return line + more
-		}
-		line += sep + name
-	}
-	return line
 }

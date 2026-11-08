@@ -69,10 +69,10 @@ func TestProjects(t *testing.T) {
 		t.Fatalf("unknown project: %q", errText)
 	}
 
-	// A new session sees the project in its instructions; the list shows its summary.
+	// Instructions stay about machines; listing projects shows their summaries.
 	s2 := h.mcpClient(h.access)
-	if instr := s2.InitializeResult().Instructions; !strings.Contains(instr, "get_project): App") {
-		t.Fatalf("instructions: %s", instr)
+	if instr := s2.InitializeResult().Instructions; strings.Contains(instr, "App") {
+		t.Fatalf("instructions mention projects: %s", instr)
 	}
 	mustContain(t, "list", mustCall(t, s2, "get_project", nil), "- App: The web app for customers.")
 
