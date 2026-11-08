@@ -168,6 +168,28 @@ abc
 	}
 }
 
+func TestWriteFileBase64Sizes(t *testing.T) {
+	// 4 bytes of a 10-byte file: base64 "AAAAAA==" decodes to 4 bytes, not 6.
+	var out text
+	writeFile(&out, "f.bin", "AAAAAA==", protocol.EncodingBase64, 0, 10, true)
+	mustHave := "[lanesh] begin f.bin (10 B, bytes 0-4)\n(base64)\nAAAAAA==\n[lanesh] end f.bin\n[lanesh] f.bin continues: 6 more bytes; read on with offset=4\n"
+	if out.b.String() != mustHave {
+		t.Fatalf("got:\n%s", out.b.String())
+	}
+}
+
+func TestParentDir(t *testing.T) {
+	for p, want := range map[string]string{
+		"/home/u/.agents/skills/pdf":    "/home/u/.agents/skills",
+		`C:\Users\u\.claude\skills\pdf`: `C:\Users\u\.claude\skills`,
+		"pdf":                           "pdf",
+	} {
+		if got := parentDir(p); got != want {
+			t.Errorf("parentDir(%q) = %q, want %q", p, got, want)
+		}
+	}
+}
+
 func TestEstimateTokensAndShorten(t *testing.T) {
 	if n := estimateTokens("abcdefgh中文"); n != 4 {
 		t.Fatalf("estimate = %d", n)

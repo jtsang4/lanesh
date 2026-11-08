@@ -1,6 +1,8 @@
 package skills
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,6 +52,9 @@ func TestGrep(t *testing.T) {
 	if res, _ := Grep(idx, protocol.SkillGrepParams{Skill: "g", Pattern: "e", MaxMatches: 2}); len(res.Matches) != 2 || !res.Truncated {
 		t.Fatalf("limit: %d truncated=%v", len(res.Matches), res.Truncated)
 	}
+	if res, _ := Grep(idx, protocol.SkillGrepParams{Skill: "g", Pattern: "the", Path: "./references/../references", IgnoreCase: true, MaxMatches: 1}); len(res.Matches) != 1 || res.FilesMatched != 1 {
+		t.Fatalf("files matched at the limit: %d matches in %d files", len(res.Matches), res.FilesMatched)
+	}
 	if _, err := Grep(idx, protocol.SkillGrepParams{Skill: "g", Pattern: "x", Path: "../.."}); err == nil {
 		t.Fatal("paths outside the skill must be rejected")
 	}
@@ -79,6 +84,18 @@ func TestReadDirectory(t *testing.T) {
 			if !strings.HasPrefix(f.Path, "references/") {
 				t.Fatalf("paths must stay relative to the skill: %s", f.Path)
 			}
+		}
+	}
+	for _, p := range []string{"./references/", "scripts/../references"} {
+		res, err := Read(idx, protocol.SkillReadParams{Skill: "d", Path: p})
+		if err != nil || res.Path != "references" || len(res.Files) != 3 {
+			t.Fatalf("%s: %+v %v", p, res, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(srcs[0].Dir, "d", "references"), filepath.Join(srcs[0].Dir, "d", "link")); err == nil {
+		res, err := Read(idx, protocol.SkillReadParams{Skill: "d", Path: "link/"})
+		if err != nil || res.Path != "references" || len(res.Files) != 3 {
+			t.Fatalf("symlinked directory: %+v %v", res, err)
 		}
 	}
 	root, err := Read(idx, protocol.SkillReadParams{Skill: "d", Path: "/"})

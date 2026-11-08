@@ -27,10 +27,11 @@ const EndMarker = "[lanesh] end of result"
 
 // Budgets, in estimated tokens.
 const (
-	resultBudget   = 7000 // a whole result
-	skillsBudget   = 5000 // the skill list inside describe_machine
-	descMaxRunes   = 200  // skill descriptions in lists
-	fileReadBudget = 20 << 10
+	resultBudget   = 7000     // a whole result
+	skillsBudget   = 5000     // the skill list inside describe_machine
+	descMaxRunes   = 200      // skill descriptions in lists
+	fileReadBudget = 20 << 10 // bytes read from a file or job at once
+	execMaxOutput  = 10_000   // bytes of each stream shown inline by exec
 )
 
 // estimateTokens approximates the token count of s: about four ASCII

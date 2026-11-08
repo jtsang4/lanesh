@@ -251,13 +251,17 @@ func inline(r *ring, stream string, maxOut int) (text string, total int64, trunc
 	for len(tail) > 0 && tail[0]&0xC0 == 0x80 {
 		tail = tail[1:]
 	}
-	omitted := total - int64(len(head)) - int64(len(tail))
+	omitted := total - dropped - int64(len(head)) - int64(len(tail))
 	hint := ""
 	if stream != "stdout" {
 		hint = " stream=" + stream
 	}
-	return fmt.Sprintf("%s\n[lanesh] %d bytes omitted here; read them with job_read%s offset=%d\n%s",
-		toText(head), omitted, hint, dropped+int64(len(head)), toText(tail)), total, true
+	note := ""
+	if dropped > 0 {
+		note = fmt.Sprintf("[lanesh] %d earlier bytes were dropped from the job's buffer\n", dropped)
+	}
+	return fmt.Sprintf("%s%s\n[lanesh] %d bytes omitted here; read them with job_read%s offset=%d\n%s",
+		note, toText(head), omitted, hint, dropped+int64(len(head)), toText(tail)), total, true
 }
 
 func (m *Manager) status(j *job, maxOut int) protocol.JobStatus {

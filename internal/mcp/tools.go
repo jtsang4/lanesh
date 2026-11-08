@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -286,7 +287,7 @@ func (t *Tools) readSkillFiles(out *text, m Machine, in ReadSkillInput, read fun
 func writeFile(out *text, name, content, encoding string, offset, total int64, showBinary bool) {
 	n := int64(len(content))
 	if encoding == protocol.EncodingBase64 {
-		raw := n * 3 / 4
+		raw := n/4*3 - int64(strings.Count(content[max(0, len(content)-2):], "="))
 		if !showBinary {
 			out.line("[lanesh] %s is binary (%s); not shown. Copy it with transfer if you need it.", name, size(total))
 			return
@@ -376,7 +377,7 @@ func (t *Tools) grepSkill(ctx context.Context, c caller, in GrepInput) (*text, e
 		out.line("[lanesh] %d more matches not shown (to fit the budget); narrow pattern or path.", rest)
 	}
 	if res.Truncated {
-		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches.", len(res.Matches))
+		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches (up to 500).", len(res.Matches))
 	}
 	if len(res.Skipped) > 0 {
 		out.line("[lanesh] not searched: %s", strings.Join(res.Skipped, ", "))
@@ -411,7 +412,7 @@ func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error)
 	var st protocol.JobStatus
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodExecStart, protocol.ExecParams{
 		Command: in.Command, Cwd: in.Cwd, Skill: in.Skill, Shell: in.Shell, Env: in.Env, Stdin: in.Stdin,
-		TimeoutMS: in.TimeoutMS, Background: in.Background, Owner: c.keyID,
+		TimeoutMS: in.TimeoutMS, Background: in.Background, Owner: c.keyID, MaxOutput: execMaxOutput,
 	}, &st)
 	detail := map[string]any{"command": truncate(in.Command, 1000), "cwd": in.Cwd, "skill": in.Skill}
 	if err == nil {
@@ -486,9 +487,10 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 	if err != nil {
 		return nil, err
 	}
+	in.Offset = max(in.Offset, 0)
 	var res protocol.JobReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobRead,
-		protocol.JobReadParams{JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, Limit: in.Limit, WaitMS: in.WaitMS}, &res)
+		protocol.JobReadParams{JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, Limit: cmp.Or(in.Limit, fileReadBudget), WaitMS: in.WaitMS}, &res)
 	if err != nil {
 		return nil, protoErr(err)
 	}

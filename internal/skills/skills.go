@@ -260,12 +260,15 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 	if withTree {
 		rel = SkillFile
 	}
-	if rel == "" || rel == "." {
+	if rel == "" {
+		rel = "."
+	}
+	rel = filepath.Clean(filepath.FromSlash(rel))
+	if rel == "." {
 		// The skill root itself: list everything.
 		files, truncated := TreeUnder(s.Path, "")
 		return protocol.SkillReadResult{Skill: s.Name, Dir: s.Path, Path: "", IsDir: true, Files: files, FilesTruncated: truncated}, nil
 	}
-	rel = filepath.FromSlash(rel)
 	if !filepath.IsLocal(rel) {
 		return protocol.SkillReadResult{}, ErrOutside
 	}
@@ -274,8 +277,13 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 		return protocol.SkillReadResult{}, err
 	}
 	if info, err := os.Stat(target); err == nil && info.IsDir() {
-		files, truncated := TreeUnder(s.Path, filepath.ToSlash(rel))
-		return protocol.SkillReadResult{Skill: s.Name, Dir: s.Path, Path: filepath.ToSlash(rel), IsDir: true, Files: files, FilesTruncated: truncated}, nil
+		// List the resolved directory, so that a symbolic link to a directory
+		// inside the skill lists its target, under the target's own path.
+		root, _ := filepath.EvalSymlinks(s.Path)
+		dirRel, _ := filepath.Rel(root, target)
+		dirRel = filepath.ToSlash(dirRel)
+		files, truncated := TreeUnder(s.Path, dirRel)
+		return protocol.SkillReadResult{Skill: s.Name, Dir: s.Path, Path: dirRel, IsDir: true, Files: files, FilesTruncated: truncated}, nil
 	}
 	res, err := files.ReadFile(target, p.Offset, p.Limit, "")
 	if err != nil {

@@ -174,6 +174,15 @@ func TestRingAndInlineTruncation(t *testing.T) {
 		!strings.HasSuffix(text, strings.Repeat("b", 50)) || !strings.Contains(text, "900 bytes omitted here; read them with job_read offset=50") {
 		t.Fatalf("inline = %q", text)
 	}
+
+	// Bytes dropped from the buffer are reported, and not counted as omitted.
+	small := newRing(200)
+	_, _ = small.Write([]byte(strings.Repeat("x", 300) + strings.Repeat("y", 200)))
+	text, _, _ = inline(small, "stderr", 100)
+	if !strings.HasPrefix(text, "[lanesh] 300 earlier bytes were dropped from the job's buffer\n") ||
+		!strings.Contains(text, "100 bytes omitted here; read them with job_read stream=stderr offset=350") {
+		t.Fatalf("inline with dropped bytes = %q", text)
+	}
 }
 
 func TestRingWrapsAcrossWrites(t *testing.T) {

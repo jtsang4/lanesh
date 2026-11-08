@@ -415,6 +415,13 @@ func TestEndToEnd(t *testing.T) {
 	if _, errText := call(t, s, "find_skills", map[string]any{}); !strings.HasPrefix(errText, "[lanesh] error: ") {
 		t.Fatalf("framed error: %q", errText)
 	}
+	// So are argument errors found by the SDK before a tool runs (call checks the end marker).
+	if _, errText := call(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": "x", "offset": "5"}); !strings.HasPrefix(errText, "[lanesh] error: ") {
+		t.Fatalf("argument type error: %q", errText)
+	}
+	if _, errText := call(t, s, "list_machines", map[string]any{"bogus": 1}); errText == "" {
+		t.Fatal("unknown arguments must be rejected")
+	}
 
 	// Admin views.
 	var laneSkills []LaneSkill

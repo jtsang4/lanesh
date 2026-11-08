@@ -99,7 +99,37 @@ func NewServer(b Backend, briefings *auth.Briefings, instructions string) *mcp.S
 		Instructions: instructions,
 	})
 	t.register(s)
+	s.AddReceivingMiddleware(frameErrors)
 	return s
+}
+
+// frameErrors adds the end marker to tool errors produced outside the tool
+// handlers, such as argument validation by the SDK, so that every result
+// ends with it.
+func frameErrors(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		res, err := next(ctx, method, req)
+		r, ok := res.(*mcp.CallToolResult)
+		if method != "tools/call" || err != nil || !ok || !r.IsError {
+			return res, err
+		}
+		var last *mcp.TextContent
+		for _, c := range r.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				last = tc
+			}
+		}
+		switch {
+		case last == nil:
+			r.Content = append(r.Content, &mcp.TextContent{Text: "[lanesh] error\n" + EndMarker})
+		case !strings.HasSuffix(last.Text, EndMarker):
+			if !strings.HasPrefix(last.Text, "[lanesh]") {
+				last.Text = "[lanesh] error: " + last.Text
+			}
+			last.Text = strings.TrimRight(last.Text, "\n") + "\n" + EndMarker
+		}
+		return res, err
+	}
 }
 
 // handler is a tool implementation that returns framed text.

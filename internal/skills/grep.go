@@ -54,8 +54,7 @@ func Grep(idx protocol.SkillIndex, p protocol.SkillGrepParams) (protocol.SkillGr
 		return protocol.SkillGrepResult{}, fmt.Errorf("%s: %w", s.Path, ErrNotFound)
 	}
 	start := root
-	if rel := strings.TrimSuffix(p.Path, "/"); rel != "" {
-		rel = filepath.FromSlash(rel)
+	if rel := filepath.Clean(filepath.FromSlash(strings.TrimSuffix(p.Path, "/"))); p.Path != "" && rel != "." {
 		if !filepath.IsLocal(rel) {
 			return protocol.SkillGrepResult{}, ErrOutside
 		}
@@ -101,15 +100,15 @@ func Grep(idx protocol.SkillIndex, p protocol.SkillGrepParams) (protocol.SkillGr
 			if !re.MatchString(line) {
 				continue
 			}
-			matched = true
 			if len(res.Matches) >= limit {
 				res.Truncated = true
 				return filepath.SkipAll
 			}
+			if !matched {
+				matched = true
+				res.FilesMatched++
+			}
 			res.Matches = append(res.Matches, protocol.GrepMatch{Path: rel, Line: n, Text: clip(strings.TrimRight(line, "\r"), maxGrepLineRunes)})
-		}
-		if matched {
-			res.FilesMatched++
 		}
 		return nil
 	})

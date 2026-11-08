@@ -3,7 +3,6 @@ package mcp
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -66,7 +65,7 @@ func writeMachine(t *text, m Machine, d protocol.DescribeResult) {
 	}
 	dirs := map[string]string{}
 	for _, s := range skills {
-		dirs[s.Source] = filepath.Dir(s.Path)
+		dirs[s.Source] = parentDir(s.Path)
 	}
 	where := make([]string, 0, len(dirs))
 	for src, dir := range dirs {
@@ -106,6 +105,15 @@ func writeMachine(t *text, m Machine, d protocol.DescribeResult) {
 		}
 		t.line("Hidden by a same-named skill with higher priority: %s", strings.Join(names, ", "))
 	}
+}
+
+// parentDir returns the directory of a path from any machine: the server may
+// run on another OS than the machine, so both separators count.
+func parentDir(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i > 0 {
+		return p[:i]
+	}
+	return p
 }
 
 func without(list []string, drop string) []string {
