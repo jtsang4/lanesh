@@ -359,7 +359,7 @@ func newKeyCmd() *cobra.Command {
 			if kind == "join" {
 				fmt.Fprintf(w, "Join a machine:\n  lanesh join %s/lanes/%s --key %s\n", c.server, l.ID, res.Token)
 			} else {
-				fmt.Fprintf(w, "Add to an agent (Claude Code):\n  claude mcp add --transport http lanesh %s/lanes/%s/mcp --header \"Authorization: Bearer %s\"\n", c.server, l.ID, res.Token)
+				fmt.Fprintf(w, "Add to an agent (Claude Code, all projects):\n  claude mcp add --scope user --transport http lanesh %s/lanes/%s/mcp --header \"Authorization: Bearer %s\"\n", c.server, l.ID, res.Token)
 			}
 			return nil
 		},

@@ -3,6 +3,7 @@
 	import { app } from '#lib/state/app.svelte.ts';
 	import { clientSnippets } from '#lib/snippets.ts';
 	import CodeBlock from './CodeBlock.svelte';
+	import Rich from './Rich.svelte';
 	import Segmented from './Segmented.svelte';
 
 	let { laneId, token }: { laneId: string; token?: string } = $props();
@@ -19,16 +20,18 @@
 		options={[
 			{ id: 'claude', label: 'Claude Code' },
 			{ id: 'codex', label: 'Codex' },
-			{ id: 'json', label: 'Cursor · mcp.json' }
+			{ id: 'json', label: 'Cursor' }
 		]}
 	/>
 	{#if variant === 'claude'}
 		<CodeBlock code={s.claude} />
+		<p class="note"><Rich text={t('connect.client.claudeNote')} /></p>
 	{:else if variant === 'codex'}
 		<CodeBlock code={s.codex} />
-		<p class="note">{t('connect.client.codexNote')}</p>
+		<p class="note"><Rich text={t('connect.client.codexNote')} /></p>
 		<CodeBlock code={s.codexEnv} />
 	{:else}
+		<p class="note"><Rich text={t('connect.client.cursorNote')} /></p>
 		<CodeBlock code={s.json} wrap={false} />
 	{/if}
 </div>

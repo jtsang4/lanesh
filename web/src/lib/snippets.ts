@@ -37,9 +37,10 @@ export function clientSnippets(base: string, laneId: string, key = ACCESS_PLACEH
 		2
 	);
 	return {
-		claude: `claude mcp add --transport http lanesh ${url} \\\n  --header "Authorization: Bearer ${key}"`,
-		codex: `# ~/.codex/config.toml\n[mcp_servers.lanesh]\nurl = "${url}"\nbearer_token_env_var = "LANESH_ACCESS_KEY"`,
-		codexEnv: `export LANESH_ACCESS_KEY="${key}"`,
+		// All three are global (user-level) configurations, available in every project.
+		claude: `claude mcp add --scope user --transport http lanesh ${url} \\\n  --header "Authorization: Bearer ${key}"`,
+		codex: `codex mcp add lanesh --url ${url} \\\n  --bearer-token-env-var LANESH_ACCESS_KEY`,
+		codexEnv: `# ~/.zshrc, ~/.bashrc or your shell's profile\nexport LANESH_ACCESS_KEY="${key}"`,
 		json
 	};
 }

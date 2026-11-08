@@ -261,7 +261,12 @@ export const zhCN: Record<MessageKey, string> = {
 	'connect.step.endpointDesc':
 		'用 `Authorization: Bearer <key>` 传递凭证。追加 `?machine=<name>` 可以告诉 Lanesh Agent 自己运行在哪台机器上。',
 	'connect.step.client': '添加到客户端',
-	'connect.client.codexNote': '然后在启动 Codex 的 shell 中导出凭证：',
+	'connect.client.claudeNote':
+		'`--scope user` 会把 Lanesh 加到用户级配置，所有项目都能使用，而不只是当前目录。',
+	'connect.client.codexNote':
+		'这条命令会写入全局的 `~/.codex/config.toml`。再把凭证写进 shell 配置文件，让每次启动的 Codex 都能读到：',
+	'connect.client.cursorNote':
+		'保存为 `~/.cursor/mcp.json`，所有项目都能使用。如果这个文件已经存在，把 `lanesh` 这一项合并到它的 `mcpServers` 里。',
 	'connect.createJoinKey': '创建 join key',
 	'connect.createAccessKey': '创建 access key',
 	'connect.publicUrlWarning':

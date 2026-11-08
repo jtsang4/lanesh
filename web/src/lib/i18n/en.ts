@@ -270,7 +270,12 @@ export const en = {
 	'connect.step.endpointDesc':
 		'Send the key as `Authorization: Bearer <key>`. Append `?machine=<name>` to tell Lanesh which machine the agent itself runs on.',
 	'connect.step.client': 'Add it to your client',
-	'connect.client.codexNote': 'Then export the key in the shell that starts Codex:',
+	'connect.client.claudeNote':
+		'`--scope user` adds Lanesh to your user configuration, so it is available in every project, not only the current directory.',
+	'connect.client.codexNote':
+		'This adds Lanesh to the global `~/.codex/config.toml`. Then put the key in your shell profile so that every Codex session can read it:',
+	'connect.client.cursorNote':
+		'Save this as `~/.cursor/mcp.json` to use Lanesh in every project. If the file already exists, add the `lanesh` entry to its `mcpServers`.',
 	'connect.createJoinKey': 'Create join key',
 	'connect.createAccessKey': 'Create access key',
 	'connect.publicUrlWarning':

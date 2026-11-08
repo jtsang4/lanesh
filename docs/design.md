@@ -307,7 +307,7 @@ Server ──transfer.receive(ticket)─▶ B ◀─GET /transfers/{id}/download
 Claude Code 配置示例：
 
 ```bash
-claude mcp add --transport http lanesh https://lanesh.example.com/lanes/<lane-id>/mcp \
+claude mcp add --scope user --transport http lanesh https://lanesh.example.com/lanes/<lane-id>/mcp \
   --header "Authorization: Bearer lsk_xxx"
 ```
 
