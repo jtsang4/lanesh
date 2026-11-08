@@ -241,7 +241,7 @@
 	}
 	.body {
 		display: grid;
-		grid-template-columns: 188px minmax(0, 1fr);
+		grid-template-columns: 208px minmax(0, 1fr);
 		flex: 1;
 		min-height: 0;
 	}
@@ -249,6 +249,8 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.side {
+		min-width: 0;
+		overflow-x: hidden;
 		padding: 10px 8px;
 		border-right: 1px solid var(--border);
 		background: var(--surface-2);

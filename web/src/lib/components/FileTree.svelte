@@ -10,6 +10,32 @@
 		onselect
 	}: { files: FileEntry[]; selected: string; onselect: (path: string) => void } = $props();
 
+	// Long names are shortened in the middle so that the extension stays
+	// visible ("example-determi….png"). Names use a monospace font, so the
+	// number of characters that fit is computed from the row width; CSS
+	// ellipsis would leave a gap because the clip edge rarely falls on a glyph
+	// boundary.
+	const ROW_CHROME = 8 + 8 + 13 + 7; // padding left/right, icon, gap
+	const INDENT = 14;
+
+	let width = $state(0);
+	let charWidth = $state(0);
+	let probe: HTMLSpanElement | undefined = $state();
+
+	$effect(() => {
+		if (probe) charWidth = probe.getBoundingClientRect().width / 10;
+	});
+
+	function fit(name: string, depth: number): string {
+		if (!width || !charWidth) return name;
+		const max = Math.floor((width - ROW_CHROME - depth * INDENT) / charWidth);
+		if (name.length <= max || max < 4) return name;
+		const dot = name.lastIndexOf('.');
+		const ext = dot > 0 && name.length - dot <= 8 ? name.slice(dot) : '';
+		const keep = max - ext.length - 1;
+		return keep >= 3 ? name.slice(0, keep) + '…' + ext : name.slice(0, max - 1) + '…';
+	}
+
 	// SKILL.md first, then the rest in path order so directories group naturally.
 	const sorted = $derived(
 		files.toSorted((a, b) => {
@@ -20,16 +46,18 @@
 	);
 </script>
 
-<nav class="tree" aria-label={t('skill.files')}>
+<nav class="tree" aria-label={t('skill.files')} bind:clientWidth={width}>
+	<span class="probe" aria-hidden="true" bind:this={probe}>MMMMMMMMMM</span>
 	<ul>
 		{#each sorted as f (f.path)}
 			{@const parts = f.path.split('/')}
 			{@const depth = parts.length - 1}
+			{@const name = parts.at(-1) ?? ''}
 			<li style:--depth={depth}>
 				{#if f.dir}
-					<span class="node dir">
+					<span class="node dir" title={f.path}>
 						<Icon name="folder" size={13} />
-						<span class="label">{parts.at(-1)}</span>
+						<span class="label">{fit(name, depth)}</span>
 					</span>
 				{:else}
 					<button
@@ -40,7 +68,7 @@
 						onclick={() => onselect(f.path)}
 					>
 						<Icon name={f.path.endsWith('.md') ? 'fileText' : 'file'} size={13} />
-						<span class="label">{parts.at(-1)}</span>
+						<span class="label">{fit(name, depth)}</span>
 					</button>
 				{/if}
 			</li>
@@ -50,11 +78,17 @@
 
 <style>
 	.tree {
+		position: relative;
 		min-width: 0;
 	}
 	ul {
 		display: grid;
+		/* Without minmax(0, …) the track grows to the longest name and rows overflow the pane. */
+		grid-template-columns: minmax(0, 1fr);
 		gap: 1px;
+	}
+	li {
+		min-width: 0;
 	}
 	.node {
 		display: flex;
@@ -69,6 +103,7 @@
 		min-width: 0;
 	}
 	.node :global(svg) {
+		flex: none;
 		color: var(--fg-3);
 	}
 	.dir {
@@ -95,11 +130,20 @@
 	.file:focus-visible {
 		outline-offset: -2px;
 	}
-	.label {
-		overflow: hidden;
-		text-overflow: ellipsis;
+	.label,
+	.probe {
 		white-space: nowrap;
 		font-family: var(--font-mono);
 		font-size: 11.5px;
+	}
+	.label {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis; /* fallback before the width is measured */
+	}
+	.probe {
+		position: absolute;
+		visibility: hidden;
+		pointer-events: none;
 	}
 </style>
