@@ -257,7 +257,13 @@ func (s *Server) mcpServer(r *http.Request) *sdkmcp.Server {
 			machines = append(machines, toMCP(v))
 		}
 	}
-	instructions := mcp.Instructions(machines)
+	var projects []string
+	if ps, err := s.store.ListProjects(r.Context(), laneID); err == nil {
+		for _, p := range ps {
+			projects = append(projects, p.Name)
+		}
+	}
+	instructions := mcp.Instructions(machines, projects)
 
 	s.lanes.mu.Lock()
 	defer s.lanes.mu.Unlock()

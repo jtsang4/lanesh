@@ -69,10 +69,10 @@ func TestProjects(t *testing.T) {
 		t.Fatalf("unknown project: %q", errText)
 	}
 
-	// Instructions stay about machines; listing projects shows their summaries.
+	// Instructions name the projects; listing them shows their summaries.
 	s2 := h.mcpClient(h.access)
-	if instr := s2.InitializeResult().Instructions; strings.Contains(instr, "App") {
-		t.Fatalf("instructions mention projects: %s", instr)
+	if instr := s2.InitializeResult().Instructions; !strings.HasSuffix(instr, "\n\nProjects: App") {
+		t.Fatalf("instructions: %s", instr)
 	}
 	mustContain(t, "list", mustCall(t, s2, "get_project", nil), "- App: The web app for customers.")
 

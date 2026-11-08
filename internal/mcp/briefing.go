@@ -201,34 +201,64 @@ const instructionsHead = `Lanesh connects you to the machines of one lane, each 
 - Run a skill's scripts on its machine (exec with skill). Move files with transfer.
 - Results end with "` + EndMarker + `"; if it is missing, your client cut the output: read less at once.`
 
-// Instructions builds the server instructions for a lane: usage first, then a
-// roster of its machines as of connection time.
-func Instructions(machines []Machine) string {
+// Instructions builds the server instructions for a lane: usage first, then
+// an overview of what the lane holds as of connection time (its machines and
+// the names of its projects). Agents get the details from the tools.
+func Instructions(machines []Machine, projects []string) string {
 	var b strings.Builder
 	b.WriteString(instructionsHead)
+	tail := projectNames(projects, maxProjectsLine)
+	budget := maxInstructions - len(tail)
 	if len(machines) == 0 {
 		b.WriteString("\n\nThis lane has no machines yet.")
-		return b.String()
+	} else {
+		b.WriteString("\n\nMachines at connection time (list_machines for now):")
+		for i, m := range machines {
+			line := fmt.Sprintf("\n- %s: %s/%s", m.Name, m.OS, m.Arch)
+			if m.Shell != "" {
+				line += ", " + m.Shell
+			}
+			line += ", " + plural(m.SkillCount, "skill", "skills")
+			if !m.Policy.AllowExec {
+				line += ", no exec"
+			}
+			if !m.Online {
+				line += ", offline"
+			}
+			more := fmt.Sprintf("\n- and %d more (see list_machines)", len(machines)-i)
+			if b.Len()+len(line)+len(more) > budget {
+				b.WriteString(more)
+				break
+			}
+			b.WriteString(line)
+		}
 	}
-	b.WriteString("\n\nMachines at connection time (list_machines for now):")
-	for i, m := range machines {
-		line := fmt.Sprintf("\n- %s: %s/%s", m.Name, m.OS, m.Arch)
-		if m.Shell != "" {
-			line += ", " + m.Shell
-		}
-		line += ", " + plural(m.SkillCount, "skill", "skills")
-		if !m.Policy.AllowExec {
-			line += ", no exec"
-		}
-		if !m.Online {
-			line += ", offline"
-		}
-		more := fmt.Sprintf("\n- and %d more (see list_machines)", len(machines)-i)
-		if b.Len()+len(line)+len(more) > maxInstructions {
-			b.WriteString(more)
-			break
-		}
-		b.WriteString(line)
-	}
+	b.WriteString(tail)
 	return b.String()
+}
+
+// maxProjectsLine bounds the line naming the lane's projects.
+const maxProjectsLine = 300
+
+// projectNames is the line naming the lane's projects, within limit bytes.
+func projectNames(projects []string, limit int) string {
+	if len(projects) == 0 {
+		return ""
+	}
+	line := "\n\nProjects: "
+	for i, name := range projects {
+		sep := ""
+		if i > 0 {
+			sep = ", "
+		}
+		more := fmt.Sprintf(" and %d more", len(projects)-i)
+		if len(line)+len(sep)+len(name)+len(more) > limit {
+			if i == 0 {
+				return fmt.Sprintf("\n\nProjects: %d", len(projects))
+			}
+			return line + more
+		}
+		line += sep + name
+	}
+	return line
 }
