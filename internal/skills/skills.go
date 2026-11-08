@@ -255,10 +255,15 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 	if !ok {
 		return protocol.SkillReadResult{}, fmt.Errorf("skill %q: %w", p.Skill, ErrNotFound)
 	}
-	rel := p.Path
-	withTree := rel == ""
+	rel := strings.TrimSuffix(p.Path, "/")
+	withTree := p.Path == ""
 	if withTree {
 		rel = SkillFile
+	}
+	if rel == "" || rel == "." {
+		// The skill root itself: list everything.
+		files, truncated := TreeUnder(s.Path, "")
+		return protocol.SkillReadResult{Skill: s.Name, Dir: s.Path, Path: "", IsDir: true, Files: files, FilesTruncated: truncated}, nil
 	}
 	rel = filepath.FromSlash(rel)
 	if !filepath.IsLocal(rel) {
@@ -267,6 +272,10 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 	target, err := within(s.Path, rel)
 	if err != nil {
 		return protocol.SkillReadResult{}, err
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		files, truncated := TreeUnder(s.Path, filepath.ToSlash(rel))
+		return protocol.SkillReadResult{Skill: s.Name, Dir: s.Path, Path: filepath.ToSlash(rel), IsDir: true, Files: files, FilesTruncated: truncated}, nil
 	}
 	res, err := files.ReadFile(target, p.Offset, p.Limit, "")
 	if err != nil {
@@ -277,7 +286,7 @@ func Read(idx protocol.SkillIndex, p protocol.SkillReadParams) (protocol.SkillRe
 		Content: res.Content, Encoding: res.Encoding, Size: res.Size, Offset: res.Offset, Truncated: res.Truncated,
 	}
 	if withTree {
-		out.Files = Tree(s.Path)
+		out.Files, out.FilesTruncated = TreeUnder(s.Path, "")
 	}
 	return out, nil
 }
@@ -299,24 +308,31 @@ func within(dir, rel string) (string, error) {
 	return target, nil
 }
 
-// Tree lists files under dir (relative, slash-separated), skipping noise.
-func Tree(dir string) []protocol.FileEntry {
+// TreeUnder lists the files below sub (a slash-separated path relative to
+// the skill directory, or "" for all of it), skipping noise directories. Paths
+// are relative to the skill directory. truncated is set when the listing
+// stopped at the entry limit.
+func TreeUnder(dir, sub string) (entries []protocol.FileEntry, truncated bool) {
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	var out []protocol.FileEntry
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == root {
+	start := root
+	if sub != "" {
+		start = filepath.Join(root, filepath.FromSlash(sub))
+	}
+	_ = filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || p == start {
 			return nil
 		}
-		if len(out) >= maxTreeEntries {
+		if len(entries) >= maxTreeEntries {
+			truncated = true
 			return filepath.SkipAll
 		}
 		rel, _ := filepath.Rel(root, p)
 		e := protocol.FileEntry{Path: filepath.ToSlash(rel), Dir: d.IsDir()}
 		if d.IsDir() {
-			out = append(out, e)
+			entries = append(entries, e)
 			if skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
@@ -325,8 +341,14 @@ func Tree(dir string) []protocol.FileEntry {
 		if info, err := d.Info(); err == nil {
 			e.Size = info.Size()
 		}
-		out = append(out, e)
+		entries = append(entries, e)
 		return nil
 	})
-	return out
+	return entries, truncated
+}
+
+// Tree lists every file under dir (see TreeUnder).
+func Tree(dir string) []protocol.FileEntry {
+	entries, _ := TreeUnder(dir, "")
+	return entries
 }

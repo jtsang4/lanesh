@@ -83,6 +83,16 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 		}
 		return skills.Read(d.skillIndex(), p)
 
+	case protocol.MethodSkillGrep:
+		if !c.policy.ExposeSkills {
+			return nil, protocol.Errorf(protocol.CodeForbidden, "this machine does not share its skills with this lane")
+		}
+		p, err := decodeParams[protocol.SkillGrepParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return skills.Grep(d.skillIndex(), p)
+
 	case protocol.MethodExecStart:
 		p, err := decodeParams[protocol.ExecParams](raw)
 		if err != nil {

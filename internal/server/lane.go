@@ -202,6 +202,31 @@ func (b backend) UpdateSkills(ctx context.Context, laneID, machineID string, idx
 	_ = b.s.store.SaveSkills(context.WithoutCancel(ctx), laneID, machineID, idx)
 }
 
+func (b backend) LaneSkills(ctx context.Context, laneID string) map[string]protocol.SkillIndex {
+	views, err := b.s.machineViews(ctx, laneID)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]protocol.SkillIndex, len(views))
+	for _, v := range views {
+		out[v.ID] = b.s.skillIndex(ctx, laneID, v.ID)
+	}
+	return out
+}
+
+// skillIndex returns a machine's live skill index, or its last snapshot when
+// it is offline or has not reported one on this connection yet.
+func (s *Server) skillIndex(ctx context.Context, laneID, machineID string) protocol.SkillIndex {
+	var idx protocol.SkillIndex
+	if c := s.hub.Get(laneID, machineID); c != nil {
+		_, idx = c.State()
+	}
+	if idx.Hash == "" {
+		idx, _, _ = s.store.Skills(ctx, laneID, machineID)
+	}
+	return idx
+}
+
 func (b backend) SkillHistory(ctx context.Context, laneID, machineID string) []protocol.SkillIndex {
 	hist, err := b.s.store.SkillHistory(ctx, laneID, machineID)
 	if err != nil {

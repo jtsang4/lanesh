@@ -17,7 +17,7 @@ func TestInstructionsFitClientLimits(t *testing.T) {
 		{Name: "build-box", OS: "linux", Arch: "amd64", Shell: "bash", SkillCount: 3, Online: true, Policy: protocol.Policy{AllowExec: true}},
 		{Name: "nas", OS: "linux", Arch: "arm64", SkillCount: 1, Policy: protocol.Policy{}},
 	})
-	for _, want := range []string{"- build-box: linux/amd64, bash, 3 skills", "- nas: linux/arm64, 1 skills, no exec, offline"} {
+	for _, want := range []string{"- build-box: linux/amd64, bash, 3 skills", "- nas: linux/arm64, 1 skill, no exec, offline"} {
 		if !strings.Contains(few, want) {
 			t.Errorf("missing %q in:\n%s", want, few)
 		}
@@ -51,8 +51,8 @@ func TestDiffSkills(t *testing.T) {
 	}}
 	got := renderChanges(diffSkills(old, cur))
 	want := "Changes since your last briefing:\n+ fresh (new)" +
-		"\n~ content (updated; if you read it before, read it again with read_skill before relying on it)" +
-		"\n~ described (updated; if you read it before, read it again with read_skill before relying on it)" +
+		"\n~ content (updated; if you read it before, read it again before relying on it)" +
+		"\n~ described (updated; if you read it before, read it again before relying on it)" +
 		"\n- gone (removed)"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -75,15 +75,19 @@ func TestRenderBriefingAndJoin(t *testing.T) {
 	if strings.Contains(text, "Changes since") {
 		t.Fatalf("a briefing without changes must not mention them:\n%s", text)
 	}
-	for _, want := range []string{`Nothing was run on "mac"`, `repeat the same transfer call with to_briefing "mac:abcdefgh"`, "do not call describe_machine", "Shell: zsh (available: bash, zsh)", "- deploy: Deploy things", "pdf (claude)"} {
+	for _, want := range []string{`[lanesh] nothing was run on "mac"`, `repeat the same transfer call with to_briefing "mac:abcdefgh"`, "no describe_machine needed", "Shell: zsh (also bash)", "- deploy: Deploy things", "pdf (claude)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
 
-	a, b := &BriefingRequired{Text: "A"}, &BriefingRequired{Text: "B"}
+	if !strings.HasSuffix(text, "\n"+EndMarker) {
+		t.Fatalf("briefing must end with the end marker:\n%s", text)
+	}
+
+	a, b := &BriefingRequired{Text: "A\n" + EndMarker}, &BriefingRequired{Text: "B\n" + EndMarker}
 	var br *BriefingRequired
-	if err := joinBriefings(a, nil, b); !errors.As(err, &br) || br.Text != "A\n\n---\n\nB" {
+	if err := joinBriefings(a, nil, b); !errors.As(err, &br) || br.Text != "A\nB\n"+EndMarker {
 		t.Fatalf("joined = %v", err)
 	}
 	other := errors.New("offline")

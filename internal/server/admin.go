@@ -410,14 +410,7 @@ func (s *Server) apiLaneSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	byName := map[string]*LaneSkill{}
 	for _, v := range views {
-		var idx protocol.SkillIndex
-		if c := s.hub.Get(l.ID, v.ID); c != nil {
-			_, idx = c.State()
-		}
-		if idx.Hash == "" {
-			idx, _, _ = s.store.Skills(r.Context(), l.ID, v.ID)
-		}
-		for _, sk := range idx.Skills {
+		for _, sk := range s.skillIndex(r.Context(), l.ID, v.ID).Skills {
 			ls := byName[sk.Name]
 			if ls == nil {
 				ls = &LaneSkill{Name: sk.Name, Description: sk.Description, Consistent: true}

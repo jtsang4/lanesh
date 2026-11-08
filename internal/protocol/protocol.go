@@ -30,6 +30,7 @@ const (
 const (
 	MethodDescribe        = "machine.describe"
 	MethodSkillRead       = "skill.read"
+	MethodSkillGrep       = "skill.grep"
 	MethodExecStart       = "exec.start"
 	MethodJobRead         = "job.read"
 	MethodJobWrite        = "job.write"
@@ -195,6 +196,37 @@ type SkillReadResult struct {
 	Offset    int64       `json:"offset"`
 	Truncated bool        `json:"truncated,omitempty"`
 	Files     []FileEntry `json:"files,omitempty"`
+	// IsDir is set when Path names a directory; Files then lists it.
+	IsDir bool `json:"is_dir,omitempty"`
+	// FilesTruncated is set when Files stopped at the listing limit.
+	FilesTruncated bool `json:"files_truncated,omitempty"`
+}
+
+// SkillGrepParams searches the text files of a skill.
+type SkillGrepParams struct {
+	Skill      string `json:"skill"`
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path,omitempty"`
+	Regex      bool   `json:"regex,omitempty"`
+	IgnoreCase bool   `json:"ignore_case,omitempty"`
+	MaxMatches int    `json:"max_matches,omitempty"`
+}
+
+// GrepMatch is one matching line.
+type GrepMatch struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+// SkillGrepResult answers MethodSkillGrep.
+type SkillGrepResult struct {
+	Skill         string      `json:"skill"`
+	Matches       []GrepMatch `json:"matches"`
+	FilesSearched int         `json:"files_searched"`
+	FilesMatched  int         `json:"files_matched"`
+	Truncated     bool        `json:"truncated,omitempty"`
+	Skipped       []string    `json:"skipped,omitempty"`
 }
 
 // ExecParams starts a job.

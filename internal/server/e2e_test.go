@@ -18,6 +18,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtsang4/lanesh/internal/daemon"
+	"github.com/jtsang4/lanesh/internal/mcp"
 	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
@@ -169,37 +170,61 @@ func (h *harness) mcpClient(token string) *sdkmcp.ClientSession {
 	return session
 }
 
-// call invokes a tool and returns its structured result, or the error text.
-func call(t *testing.T, s *sdkmcp.ClientSession, tool string, args map[string]any) (map[string]any, string) {
+// call invokes a tool and returns its text, or the error text. Every result,
+// error or not, must end with the end marker.
+func call(t *testing.T, s *sdkmcp.ClientSession, tool string, args map[string]any) (string, string) {
 	t.Helper()
 	res, err := s.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		t.Fatalf("%s: %v", tool, err)
 	}
-	if res.IsError {
-		var msg strings.Builder
-		for _, c := range res.Content {
-			if tc, ok := c.(*sdkmcp.TextContent); ok {
-				msg.WriteString(tc.Text)
-			}
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*sdkmcp.TextContent); ok {
+			b.WriteString(tc.Text)
 		}
-		return nil, msg.String()
 	}
-	out, _ := res.StructuredContent.(map[string]any)
-	if out == nil {
-		raw, _ := json.Marshal(res.StructuredContent)
-		_ = json.Unmarshal(raw, &out)
+	text := b.String()
+	if !strings.HasSuffix(text, "\n"+mcp.EndMarker) {
+		t.Fatalf("%s result does not end with the end marker:\n%s", tool, text)
 	}
-	return out, ""
+	if res.IsError {
+		return "", text
+	}
+	return text, ""
 }
 
-func mustCall(t *testing.T, s *sdkmcp.ClientSession, tool string, args map[string]any) map[string]any {
+func mustCall(t *testing.T, s *sdkmcp.ClientSession, tool string, args map[string]any) string {
 	t.Helper()
 	out, errText := call(t, s, tool, args)
 	if errText != "" {
 		t.Fatalf("%s failed: %s", tool, errText)
 	}
 	return out
+}
+
+// mustContain fails unless text contains every one of want.
+func mustContain(t *testing.T, what, text string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(text, w) {
+			t.Fatalf("%s: missing %q in:\n%s", what, w, text)
+		}
+	}
+}
+
+var (
+	describedToken = regexp.MustCompile(`Briefing token: ([a-z]+:[a-z2-7]{8})`)
+	offeredToken   = regexp.MustCompile(`with briefing "([a-z]+:[a-z2-7]{8})"`)
+)
+
+func match(t *testing.T, re *regexp.Regexp, text string) string {
+	t.Helper()
+	m := re.FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("no match for %s in:\n%s", re, text)
+	}
+	return m[1]
 }
 
 func shellCmd(unix, windows string) string {
@@ -224,9 +249,7 @@ func TestEndToEnd(t *testing.T) {
 	_ = resp.Body.Close()
 
 	list := mustCall(t, s, "list_machines", nil)
-	if n := len(list["machines"].([]any)); n != 3 {
-		t.Fatalf("machines = %v", list)
-	}
+	mustContain(t, "list_machines", list, "3 machines", "- alpha: ", "2 skills", "- gamma: ", "no commands or file access")
 
 	// The instructions carry the usage essentials and a roster of the lane.
 	instr := s.InitializeResult().Instructions
@@ -237,27 +260,19 @@ func TestEndToEnd(t *testing.T) {
 
 	// Without a briefing token nothing runs; the reply is the briefing itself.
 	_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": "", "command": "echo hi"})
-	if !strings.Contains(errText, `Nothing was run on "alpha"`) || !strings.Contains(errText, "- deploy: The deploy skill") {
-		t.Fatalf("exec without briefing: %q", errText)
-	}
-	offered := regexp.MustCompile(`with briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)
-	if offered == nil {
-		t.Fatalf("no token offered: %q", errText)
-	}
+	mustContain(t, "exec without briefing", errText, `[lanesh] nothing was run on "alpha"`, "- deploy: The deploy skill")
+	offered := match(t, offeredToken, errText)
 
 	da := mustCall(t, s, "describe_machine", map[string]any{"machine": "alpha"})
-	briefA := da["briefing"].(string)
-	if briefA != offered[1] {
-		t.Fatalf("describe token %q differs from the offered one %q", briefA, offered[1])
+	briefA := match(t, describedToken, da)
+	if briefA != offered {
+		t.Fatalf("describe token %q differs from the offered one %q", briefA, offered)
 	}
-	if again := mustCall(t, s, "describe_machine", map[string]any{"machine": "alpha"}); again["briefing"] != briefA {
+	if again := mustCall(t, s, "describe_machine", map[string]any{"machine": "alpha"}); match(t, describedToken, again) != briefA {
 		t.Fatal("briefing tokens must be stable while the machine is unchanged")
 	}
-	if skills := da["skills"].([]any); len(skills) != 2 {
-		t.Fatalf("alpha skills = %v", skills)
-	}
-	db := mustCall(t, s, "describe_machine", map[string]any{"machine": "beta"})
-	briefB := db["briefing"].(string)
+	mustContain(t, "describe alpha", da, "Skills (2) in ", "- deploy: The deploy skill", "- review: The review skill")
+	briefB := match(t, describedToken, mustCall(t, s, "describe_machine", map[string]any{"machine": "beta"}))
 
 	// A briefing for one machine does not unlock another.
 	if _, errText := call(t, s, "exec", map[string]any{"machine": "beta", "briefing": briefA, "command": "echo hi"}); !strings.Contains(errText, "unknown") {
@@ -268,69 +283,70 @@ func TestEndToEnd(t *testing.T) {
 	_, errText = call(t, s, "transfer", map[string]any{
 		"from_machine": "alpha", "from_briefing": "", "from_path": "x", "to_machine": "beta", "to_briefing": "", "to_path": "y",
 	})
-	if !strings.Contains(errText, `Nothing was run on "alpha"`) || !strings.Contains(errText, `Nothing was run on "beta"`) {
-		t.Fatalf("transfer briefings: %q", errText)
+	mustContain(t, "transfer briefings", errText, `nothing was run on "alpha"`, `nothing was run on "beta"`, `to_briefing "beta:`)
+	if strings.Count(errText, mcp.EndMarker) != 1 {
+		t.Fatalf("joined briefings must end once:\n%s", errText)
 	}
 
+	// Finding skills by keyword, across machines and on one machine.
+	found := mustCall(t, s, "find_skills", map[string]any{"query": "deploy"})
+	mustContain(t, "find_skills", found, "- deploy (on alpha, beta; identical): The deploy skill", "describe_machine, then read_skill")
+	if strings.Contains(found, "- review") {
+		t.Fatalf("find_skills matched too much:\n%s", found)
+	}
+	mustContain(t, "find_skills machine", mustCall(t, s, "find_skills", map[string]any{"machine": "alpha"}), "2 skills on \"alpha\"", "- review: The review skill")
+
 	sk := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy"})
-	if !strings.Contains(sk["content"].(string), "# deploy") || len(sk["files"].([]any)) == 0 {
-		t.Fatalf("read_skill = %v", sk)
-	}
+	mustContain(t, "read_skill", sk, "[lanesh] begin SKILL.md", "# deploy", "[lanesh] end SKILL.md", "Files:", "scripts/", "  data.txt (14 B)")
 	file := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "scripts/data.txt"})
-	if file["content"] != "payload-deploy" {
-		t.Fatalf("read_skill file = %v", file)
-	}
+	mustContain(t, "read_skill file", file, "[lanesh] begin scripts/data.txt (14 B)\npayload-deploy\n[lanesh] end scripts/data.txt")
+	part := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "scripts/data.txt", "limit": 7})
+	mustContain(t, "partial read", part, "bytes 0-7", "payload\n", "continues: 7 more bytes; read on with offset=7")
+	dir := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "scripts/"})
+	mustContain(t, "read_skill directory", dir, "directory scripts/", "\ndata.txt (14 B)")
+	both := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "paths": []string{"SKILL.md", "scripts/data.txt", "missing.md"}})
+	mustContain(t, "read_skill paths", both, "begin SKILL.md", "begin scripts/data.txt", "[lanesh] error: missing.md")
 	if _, errText := call(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "../../.lanesh/credentials.toml"}); errText == "" {
 		t.Fatal("path traversal must be rejected")
 	}
+	grep := mustCall(t, s, "grep_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "pattern": "PAYLOAD"})
+	mustContain(t, "grep_skill", grep, "1 match in 1 of 2 files", "scripts/data.txt:1: payload-deploy")
 
 	// Commands run in the skill directory when skill is set.
 	ex := mustCall(t, s, "exec", map[string]any{
 		"machine": "alpha", "briefing": briefA, "skill": "deploy",
 		"command": shellCmd("cat scripts/data.txt", "Get-Content scripts/data.txt"),
 	})
-	if ex["status"] != "exited" || strings.TrimSpace(ex["stdout"].(string)) != "payload-deploy" {
-		t.Fatalf("exec = %v", ex)
-	}
+	mustContain(t, "exec", ex, "exited 0", "[lanesh] begin stdout", "payload-deploy", "[lanesh] end stdout", "stderr: empty")
 
 	// Long-running commands continue in the background.
 	bg := mustCall(t, s, "exec", map[string]any{
 		"machine": "alpha", "briefing": briefA, "timeout_ms": 200,
 		"command": shellCmd("echo started; sleep 30", "Write-Output started; Start-Sleep -Seconds 30"),
 	})
-	if bg["status"] != "running" {
-		t.Fatalf("background exec = %v", bg)
-	}
+	mustContain(t, "background exec", bg, "still running", "follow with job_read")
+	bgID := match(t, regexp.MustCompile(`\(job (\S+)\)\n`), bg)
 	// Wait for the first line so that the shell has really started.
 	for deadline := time.Now().Add(20 * time.Second); ; {
-		r := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bg["job_id"]})
-		if strings.Contains(r["data"].(string), "started") {
+		r := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID, "wait_ms": 1000})
+		if strings.Contains(r, "started") {
+			mustContain(t, "job_read running", r, "no more stdout yet; the job is running")
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("background job produced no output: %v", r)
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 	jobs := mustCall(t, s, "job_list", map[string]any{"machine": "alpha"})
-	if len(jobs["jobs"].([]any)) < 2 {
-		t.Fatalf("job_list = %v", jobs)
-	}
-	killed := mustCall(t, s, "job_kill", map[string]any{"machine": "alpha", "job_id": bg["job_id"]})
-	if killed["status"] != "killed" {
-		t.Fatalf("job_kill = %v", killed)
-	}
-	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bg["job_id"]})
-	if !strings.Contains(read["data"].(string), "started") || read["eof"] != true {
-		t.Fatalf("job_read = %v", read)
-	}
+	mustContain(t, "job_list", jobs, "2 jobs", "- "+bgID+": still running")
+	mustContain(t, "job_kill", mustCall(t, s, "job_kill", map[string]any{"machine": "alpha", "job_id": bgID}), "killed")
+	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID})
+	mustContain(t, "job_read", read, "started", "end of stdout; the job has finished")
 
 	// Files and transfers.
-	mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "create_dirs": true})
+	mustContain(t, "write_file", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "create_dirs": true}), "wrote 16 B")
 	rf := mustCall(t, s, "read_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "~/out/report.txt"})
-	if rf["content"] != "hello from alpha" {
-		t.Fatalf("read_file = %v", rf)
-	}
+	mustContain(t, "read_file", rf, "(16 B)\nhello from alpha\n[lanesh] end ")
 	if _, errText := call(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "x"}); !strings.Contains(errText, "exists") {
 		t.Fatalf("overwrite protection: %q", errText)
 	}
@@ -338,9 +354,7 @@ func TestEndToEnd(t *testing.T) {
 		"from_machine": "alpha", "from_briefing": briefA, "from_path": "out",
 		"to_machine": "beta", "to_briefing": briefB, "to_path": "inbox/from-alpha",
 	})
-	if tr["files"].(float64) != 1 {
-		t.Fatalf("transfer = %v", tr)
-	}
+	mustContain(t, "transfer", tr, "copied 1 file (16 B)")
 	got, err := os.ReadFile(filepath.Join(b.home, "inbox", "from-alpha", "report.txt"))
 	if err != nil || string(got) != "hello from alpha" {
 		t.Fatalf("transferred file = %q, %v", got, err)
@@ -353,8 +367,8 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// A machine that does not allow exec refuses, and says so.
-	dg := mustCall(t, s, "describe_machine", map[string]any{"machine": "gamma"})
-	if _, errText := call(t, s, "exec", map[string]any{"machine": "gamma", "briefing": dg["briefing"], "command": "echo hi"}); !strings.Contains(errText, "does not allow") {
+	briefG := match(t, describedToken, mustCall(t, s, "describe_machine", map[string]any{"machine": "gamma"}))
+	if _, errText := call(t, s, "exec", map[string]any{"machine": "gamma", "briefing": briefG, "command": "echo hi"}); !strings.Contains(errText, "does not allow") {
 		t.Fatalf("gamma exec: %q", errText)
 	}
 
@@ -371,7 +385,7 @@ func TestEndToEnd(t *testing.T) {
 			if !strings.Contains(errText, "changed since your last briefing") || strings.Contains(errText, "~ review") {
 				t.Fatalf("change report: %q", errText)
 			}
-			fresh = regexp.MustCompile(`with briefing "(alpha:[a-z2-7]{8})"`).FindStringSubmatch(errText)[1]
+			fresh = match(t, offeredToken, errText)
 		} else if time.Now().After(deadline) {
 			t.Fatalf("no precise change report after the skills changed: %q", errText)
 		}
@@ -393,6 +407,11 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("token must change with the skills")
 	}
 	mustCall(t, s, "exec", map[string]any{"machine": "alpha", "briefing": fresh, "command": shellCmd("true", "$null")})
+
+	// Plain errors are framed too.
+	if _, errText := call(t, s, "find_skills", map[string]any{}); !strings.HasPrefix(errText, "[lanesh] error: ") {
+		t.Fatalf("framed error: %q", errText)
+	}
 
 	// Admin views.
 	var laneSkills []LaneSkill

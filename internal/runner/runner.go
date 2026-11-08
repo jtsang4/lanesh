@@ -21,10 +21,10 @@ import (
 const (
 	DefaultWait      = 30 * time.Second
 	MaxWait          = 10 * time.Minute
-	DefaultMaxOutput = 30_000
+	DefaultMaxOutput = 10_000
 	DefaultBuffer    = 16 << 20
 	DefaultRetention = time.Hour
-	DefaultReadLimit = 64 << 10
+	DefaultReadLimit = 20 << 10
 	MaxReadLimit     = 1 << 20
 	MaxReadWait      = time.Minute
 	MaxRunning       = 64
@@ -237,13 +237,13 @@ func (m *Manager) wait(j *job, cmd *exec.Cmd) {
 
 // inline renders a stream for an exec result, keeping head and tail when the
 // output exceeds maxOut bytes.
-func inline(r *ring, maxOut int) (text string, total int64, truncated bool) {
+func inline(r *ring, stream string, maxOut int) (text string, total int64, truncated bool) {
 	data, total, dropped := r.Snapshot()
 	if len(data) <= maxOut && dropped == 0 {
 		return toText(data), total, false
 	}
 	if len(data) <= maxOut {
-		return fmt.Sprintf("[%d earlier bytes dropped]\n", dropped) + toText(data), total, true
+		return fmt.Sprintf("[lanesh] %d earlier bytes were dropped from the job's buffer\n", dropped) + toText(data), total, true
 	}
 	half := maxOut / 2
 	head := cutRuneBoundary(data[:half])
@@ -252,13 +252,18 @@ func inline(r *ring, maxOut int) (text string, total int64, truncated bool) {
 		tail = tail[1:]
 	}
 	omitted := total - int64(len(head)) - int64(len(tail))
-	return fmt.Sprintf("%s\n[... %d bytes omitted; read them with job_read ...]\n%s", toText(head), omitted, toText(tail)), total, true
+	hint := ""
+	if stream != "stdout" {
+		hint = " stream=" + stream
+	}
+	return fmt.Sprintf("%s\n[lanesh] %d bytes omitted here; read them with job_read%s offset=%d\n%s",
+		toText(head), omitted, hint, dropped+int64(len(head)), toText(tail)), total, true
 }
 
 func (m *Manager) status(j *job, maxOut int) protocol.JobStatus {
 	status, code, dur := j.state()
-	out, outTotal, outTrunc := inline(j.stdout, maxOut)
-	errText, errTotal, errTrunc := inline(j.stderr, maxOut)
+	out, outTotal, outTrunc := inline(j.stdout, "stdout", maxOut)
+	errText, errTotal, errTrunc := inline(j.stderr, "stderr", maxOut)
 	return protocol.JobStatus{
 		JobID: j.id, Status: status, ExitCode: code, Command: j.command, Cwd: j.cwd, Shell: j.shell,
 		StartedAt: j.started.Unix(), DurationMS: dur.Milliseconds(),
