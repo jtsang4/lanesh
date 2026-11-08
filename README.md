@@ -131,6 +131,9 @@ Any MCP client that supports Streamable HTTP works. Pass the access key as `Auth
 | `job_read` / `job_write` / `job_kill` / `job_list` | Follow, feed and stop background jobs |
 | `read_file` / `write_file` | Small inline file operations |
 | `transfer` | Stream a file or directory from one machine to another |
+| `get_project` / `update_project` | Read or change a project: where some work lives and what an agent should know about it |
+
+A **project** says where some work lives (a machine and a path, or several) and what an agent should know about it: free Markdown for what it is, its rules and where it stands. Locations are a guide, not a limit. Reading a project checks each location on its machine (does the path exist, which Git branch, is it a worktree, does it have `AGENTS.md` or `CLAUDE.md`), so nothing that a machine can report goes stale. Manage projects in the web UI, or tell an agent to.
 
 Results are compact plain text kept within a token budget. Whatever Lanesh leaves out (long output, large skill trees, the rest of a file) is stated in place with how to get it, and every result ends with `[lanesh] end of result`, so an agent can tell when its client cut a result short.
 

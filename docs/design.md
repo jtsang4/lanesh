@@ -319,7 +319,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 `instructions` 按 Lane 动态生成（`internal/mcp/briefing.go` 中的 `Instructions`），每次建立 MCP 连接时根据 Lane 的当前状态生成：
 
 - **前 512 字符**是使用流程：`describe_machine` 查看 skill 并拿到简报令牌、调用时带上令牌、调用返回简报时说明什么都没执行并用新令牌重试、在 skill 所在的机器上执行脚本、用 `transfer` 传文件、每个结果都以结束标记收尾（见 §8.3）。OpenAI 建议把关键信息放在 instructions 的前 512 字符。
-- **其后**是连接时的机器清单：名称、系统/架构、默认 shell、skill 数量、是否禁止执行、是否离线。
+- **其后**是连接时 Lane 内容的概览：机器清单（名称、系统/架构、默认 shell、skill 数量、是否禁止执行、是否离线），以及一行项目名称（最多 300 字符）。instructions 只介绍有哪些东西，细节由 Agent 调用工具获取，不往里塞更多内容。
 - **总长度不超过 2,000 字符**。Claude Code 只保留每个服务 instructions 的前 2,048 字符；机器太多时，清单末尾改为"还有 N 台，请调用 `list_machines`"。
 - 不包含 skill 列表和简报令牌。Agent 必须真正看过某台机器的简报，才能操作它。
 - 不能假设客户端会把 instructions 放进系统提示：规范只说"可以"，实测 Claude Code 2.1.285 把它作为第一条用户消息里的附件注入。所以 instructions 只用于引导，正确性由 §8.4 的令牌机制保证。
@@ -406,9 +406,13 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 - 在两台机器之间传输文件或目录，见 §7。
 
+**`get_project(project?)`**、**`update_project(project, ...)`**
+
+项目工具，见 §8.5。
+
 **与旧版本守护进程的兼容**
 
-`grep_skill` 和目录读取需要新版本的守护进程。守护进程会自动升级到 Server 的版本；升级完成之前，调用旧守护进程不支持的方法时，返回"这台机器的 Lanesh 版本较旧，会自动升级，请稍后重试"。
+`grep_skill`、目录读取和项目位置检查需要新版本的守护进程。守护进程会自动升级到 Server 的版本；升级完成之前，调用旧守护进程不支持的方法时，返回"这台机器的 Lanesh 版本较旧，会自动升级，请稍后重试"。
 
 ### 8.4 简报令牌（describe gating）
 
@@ -467,6 +471,33 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - 子 Agent 没有从主 Agent 拿到令牌时，第一次操作同样会收到简报。
 - 与协议版本无关，新旧客户端行为一致。
 
+### 8.5 项目
+
+项目记录某项工作在哪些机器的哪些路径上，以及 Agent 需要知道什么。它是提醒，不是限制：Agent 照样可以在别的路径上工作。用户使用 Agent 时会说明用哪个项目，Agent 再用 `get_project` 读取，所以不需要把会话和项目绑定。
+
+**结构上只保留系统需要依据它做事的东西**，其余都是自由文本，以后想写什么都不用改表结构：
+
+| 类别 | 内容 | 处理方式 |
+|---|---|---|
+| 系统要依据它做事的 | 名称（在 Lane 内唯一，不区分大小写）；位置：机器和路径 | 字段 |
+| 能从机器上实时查到的 | 路径是否存在；是否在 Git 仓库里、当前分支、是否为 linked worktree；目录里有没有 `AGENTS.md`、`CLAUDE.md`、`.claude/CLAUDE.md` | 每次读取时由守护进程检查（`path.inspect`，只读文件，不执行命令），不存储 |
+| 意图、规则、约定、进展 | 项目是什么、有哪些规则（例如新需求用 git worktree）、当前状态 | 说明文档：一份自由格式的 Markdown，最多 20KB |
+
+- **位置**是项目主路径的入口。worktree 这类临时工作空间不作为位置登记，需要时写在说明里。
+- **进展**不单独记录：说明里简单写一下当前状态即可，源码本身才是最新、最完整的进展。
+- **仓库里的 `AGENTS.md` / `CLAUDE.md`** 只提示 Agent 去读，不复制到 Lanesh。`CLAUDE.md` 指向 `AGENTS.md`（软链接）时标出是同一个文件，避免重复读取。机器不允许文件访问（`allow_exec` 为 false）或离线时，不检查，写明原因。
+- **修订**：每次修改修订号加一，并保存一份完整快照（名称、说明、位置），保留最近 20 个，可以在界面上查看和恢复。修改都记入审计日志（`project.create` / `project.update` / `project.delete`）。
+
+**工具**
+
+- `get_project(project?)`：不传项目时列出项目名和说明的第一段；传项目时返回修订号、各位置及其检查结果、说明全文。
+- `update_project(project, create?, rename?, old_text?, new_text?, context?, revision?, add_locations?, remove_locations?)`：
+  - 修改说明优先用 `old_text` / `new_text` 局部替换：`old_text` 必须在说明中恰好出现一次，否则失败并提示重新读取，所以不会覆盖别人的修改，也不用把整篇说明发回来。只给 `new_text` 时追加到末尾。
+  - `context` 整篇替换说明，必须带上读取时的 `revision`；项目在此之后被改过时失败。
+  - `add_locations` / `remove_locations` 增删位置，机器按名称指定。
+  - 新建必须写 `create: true`，避免写错名称时误建项目。
+- 两个工具都不需要简报令牌：它们只读写 Server 上的数据，检查位置时也不在机器上执行命令。
+
 ## 9. Server
 
 ### 9.1 路由
@@ -506,6 +537,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - `skill_snapshots`：`lane_id`、`machine_id`、`index_json`、`updated_at`（用于离线时在 UI 中展示）
 - `skill_history`：`lane_id`、`machine_id`、`hash`、`index_json`、`seq`（每台机器内单调递增的序号，不依赖时钟精度）。每个 (Lane, 机器) 保留最近 20 个 skill 索引版本，用于生成变化报告（§8.4）
 - `admin_sessions`：Web UI 登录会话
+- `projects`：`id`、`lane_id`、`name`、`context`、`locations`（JSON：机器 ID 和路径）、`revision`、`created_at`、`updated_at`、`updated_by`；`project_revisions` 保存每个修订的完整快照，保留最近 20 个（迁移 3）
 - `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
 
 数据库迁移内置在二进制中，启动时自动执行，只追加新的迁移，不修改已发布的迁移。迁移 2 为审计日志的分页补齐了索引：按 Lane（以及按机器、动作、发起者筛选）倒序取一页时直接沿索引读取，不对整个 Lane 的记录排序。
@@ -533,6 +565,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
   - skill：按机器浏览，渲染 `SKILL.md`，查看文件树；标出不同机器上同名 skill 的内容是否一致
   - 凭证：发放（明文只显示一次）、吊销、最后使用时间；分页显示
   - 接入片段：各系统的安装加 join 命令；Claude Code、Codex、Cursor 等客户端的 MCP 配置
+  - 项目：列表；详情页查看各位置的实时检查结果并增删位置，编辑说明（Markdown，保存时如果已被别人修改，提示选择载入最新还是覆盖），查看和恢复历史修订
   - 活动：审计日志，可按机器、动作和凭证筛选，分页加载
 - 实例信息：Server 版本、数据目录、连接数。
 

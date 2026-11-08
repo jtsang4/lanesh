@@ -9,6 +9,10 @@ import type {
 	Lane,
 	LaneSkill,
 	Machine,
+	Project,
+	ProjectLocation,
+	ProjectRevision,
+	ProjectSummary,
 	Session,
 	SkillIndex,
 	SkillReadResult
@@ -145,5 +149,23 @@ export const api = {
 	audit: (
 		lane: string,
 		filter: { machine?: string; action?: string; actor?: string; before?: number; limit?: number }
-	) => request<AuditEntry[]>('GET', `/lanes/${enc(lane)}/audit${queryString(filter)}`)
+	) => request<AuditEntry[]>('GET', `/lanes/${enc(lane)}/audit${queryString(filter)}`),
+
+	projects: (lane: string) => request<ProjectSummary[]>('GET', `/lanes/${enc(lane)}/projects`),
+	project: (lane: string, ref: string) =>
+		request<Project>('GET', `/lanes/${enc(lane)}/projects/${enc(ref)}`),
+	createProject: (
+		lane: string,
+		body: { name: string; context?: string; locations?: ProjectLocation[] }
+	) => request<Project>('POST', `/lanes/${enc(lane)}/projects`, body),
+	/** Fields left out keep their value. With base_revision, a 409 means it changed meanwhile. */
+	updateProject: (
+		lane: string,
+		id: string,
+		body: { name?: string; context?: string; locations?: ProjectLocation[]; base_revision?: number }
+	) => request<Project>('PATCH', `/lanes/${enc(lane)}/projects/${enc(id)}`, body),
+	deleteProject: (lane: string, id: string) =>
+		request<void>('DELETE', `/lanes/${enc(lane)}/projects/${enc(id)}`),
+	projectRevisions: (lane: string, id: string) =>
+		request<ProjectRevision[]>('GET', `/lanes/${enc(lane)}/projects/${enc(id)}/revisions`)
 };

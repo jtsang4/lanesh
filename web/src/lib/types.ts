@@ -133,6 +133,66 @@ export interface CreatedKey {
 	token: string;
 }
 
+/** What a machine reports about a project location now. */
+export interface PathInfo {
+	path: string;
+	resolved?: string;
+	exists: boolean;
+	dir?: boolean;
+	git?: boolean;
+	branch?: string;
+	worktree?: boolean;
+	agent_files?: string[];
+	error?: string;
+}
+
+export interface ProjectLocation {
+	machine_id: string;
+	path: string;
+}
+
+export interface LocationView extends ProjectLocation {
+	machine_name: string;
+	online: boolean;
+	removed?: boolean;
+	/** Missing when the path could not be checked; `note` says why. */
+	info?: PathInfo;
+	note?: string;
+}
+
+export interface ProjectSummary {
+	id: string;
+	name: string;
+	summary: string;
+	locations: LocationView[];
+	revision: number;
+	updated_at: string;
+	updated_by: string;
+}
+
+export interface Project {
+	id: string;
+	lane_id: string;
+	name: string;
+	context: string;
+	locations: LocationView[];
+	revision: number;
+	created_at: string;
+	updated_at: string;
+	updated_by: string;
+	updated_by_name: string;
+}
+
+export interface ProjectRevision {
+	revision: number;
+	name: string;
+	context: string;
+	locations: ProjectLocation[];
+	updated_at: string;
+	updated_by: string;
+	updated_by_name: string;
+}
+
 export interface AuditEntry {
 	id: number;
 	time: string;

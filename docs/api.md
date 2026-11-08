@@ -52,6 +52,19 @@ Cross-origin, cookie-authenticated, state-changing requests are rejected.
 | `POST` | `/lanes/{lane}/keys` | Body `{"kind": "join" \| "access", "name", "expires_in_days"?}`. Returns `201` with `{"key", "token"}`; the token is shown only here. |
 | `DELETE` | `/lanes/{lane}/keys/{key}` | Revokes the key. |
 
+## Projects
+
+A project names where some work lives (`locations`: a machine and a path each) and what an agent should know about it (`context`, free Markdown up to 20 KB). `{project}` is a project ID or name.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/lanes/{lane}/projects` | Projects by name: `id`, `name`, `summary` (the first paragraph of the context), `locations` with `machine_name` and `online`, `revision`, `updated_at`, `updated_by`. |
+| `POST` | `/lanes/{lane}/projects` | Body `{"name", "context"?, "locations"?: [{"machine_id", "path"}]}`. Returns `201` with the project. `409` if the lane has a project of that name (ignoring case). |
+| `GET` | `/lanes/{lane}/projects/{project}` | The project, with each location checked on its machine now: `info` (`exists`, `git`, `branch`, `worktree`, `agent_files`) or a `note` saying why it was not checked. |
+| `PATCH` | `/lanes/{lane}/projects/{project}` | Body with any of `name`, `context`, `locations` (the whole list), and `base_revision`. With `base_revision`, returns `409` and the current `project` if it changed since. |
+| `DELETE` | `/lanes/{lane}/projects/{project}` | Deletes the project and its history. Files on machines are not touched. |
+| `GET` | `/lanes/{lane}/projects/{project}/revisions` | The last 20 revisions, newest first, each a full snapshot (`revision`, `name`, `context`, `locations`, `updated_at`, `updated_by`, `updated_by_name`). Restore one by sending its fields with `PATCH`. |
+
 ## Audit log
 
 | Method | Path | Description |
@@ -69,6 +82,7 @@ Each entry has `id`, `time`, `lane_id`, `actor` (an access key ID, a machine ID 
 | `transfer` | A transfer between machines (`from_path`, `to_machine`, `to_path`, `bytes`, `files`) |
 | `machine.join`, `machine.leave`, `machine.remove` | Membership changes |
 | `key.create`, `key.revoke`, `lane.create`, `lane.delete` | Administrative changes |
+| `project.create`, `project.update`, `project.delete` | Project changes by the admin or an agent (`name`, `revision`, `changes`) |
 
 Command output and file contents are never stored.
 

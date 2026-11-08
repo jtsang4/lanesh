@@ -42,7 +42,7 @@ func TestProjects(t *testing.T) {
 	mustContain(t, "get", out,
 		`[lanesh] project "App" (revision 1, updated `, "by a)",
 		"- alpha ~/code/app: git, branch main; has AGENTS.md",
-		"read them before working there",
+		"read it before working there",
 		"- gamma /srv/app: the machine does not allow file access; not checked",
 		"[lanesh] begin context\n# App\nThe web app for customers.", "[lanesh] end context", "revision 1")
 

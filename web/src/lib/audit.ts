@@ -14,7 +14,10 @@ export const ACTIONS = [
 	'machine.remove',
 	'key.create',
 	'key.revoke',
-	'lane.create'
+	'lane.create',
+	'project.create',
+	'project.update',
+	'project.delete'
 ] as const;
 
 const ICONS: Record<string, IconName> = {
@@ -31,7 +34,10 @@ const ICONS: Record<string, IconName> = {
 	'key.create': 'key',
 	'key.revoke': 'key',
 	'lane.create': 'layers',
-	'lane.delete': 'layers'
+	'lane.delete': 'layers',
+	'project.create': 'folder',
+	'project.update': 'folder',
+	'project.delete': 'folder'
 };
 
 export function actionIcon(action: string): IconName {

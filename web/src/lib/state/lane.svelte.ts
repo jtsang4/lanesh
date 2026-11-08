@@ -1,5 +1,5 @@
 import { api } from '../api';
-import type { CreatedKey, Key, KeyKind, Lane, LaneSkill, Machine } from '../types';
+import type { CreatedKey, Key, KeyKind, Lane, LaneSkill, Machine, ProjectSummary } from '../types';
 import { app } from './app.svelte';
 import { poll } from './poll';
 
@@ -26,6 +26,8 @@ class LaneState {
 	skills = $state.raw<LaneSkill[] | null>(null);
 	skillsError = $state.raw<unknown>(null);
 	activeKeyCount = $state<number | null>(null);
+	projects = $state.raw<ProjectSummary[] | null>(null);
+	projectsError = $state.raw<unknown>(null);
 	keysVersion = $state(0);
 	fresh = $state.raw<Partial<Record<KeyKind, FreshKey>>>({});
 
@@ -44,12 +46,15 @@ class LaneState {
 		this.skills = null;
 		this.skillsError = null;
 		this.activeKeyCount = null;
+		this.projects = null;
+		this.projectsError = null;
 		this.#skillsSig = null;
 		this.fresh = revealed.get(id) ?? {};
 
 		void this.loadLane();
 		void this.loadMachines();
 		void this.countKeys();
+		void this.loadProjects();
 		return poll(() => this.loadMachines(), 5000);
 	}
 
@@ -99,6 +104,18 @@ class LaneState {
 			this.skillsError = null;
 		} catch (err) {
 			if (id === this.id) this.skillsError = err;
+		}
+	}
+
+	async loadProjects() {
+		const id = this.id;
+		try {
+			const projects = await api.projects(id);
+			if (id !== this.id) return;
+			this.projects = projects;
+			this.projectsError = null;
+		} catch (err) {
+			if (id === this.id) this.projectsError = err;
 		}
 	}
 

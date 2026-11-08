@@ -69,6 +69,12 @@
 		<div class="meta solo">
 			<span class="strong">{str(d.name) || str(d.key_id)}</span>
 		</div>
+	{:else if entry.action.startsWith('project.')}
+		<div class="meta solo">
+			<span class="strong">{str(d.name)}</span>
+			{#if num(d.revision)}<span>{t('activity.revision', { n: num(d.revision) ?? 0 })}</span>{/if}
+			{#if str(d.changes)}<span>{str(d.changes)}</span>{/if}
+		</div>
 	{:else if entry.action === 'lane.create' || entry.action === 'lane.delete'}
 		<div class="meta solo"><span class="strong">{str(d.name)}</span></div>
 	{:else if Object.keys(d).length > 0}

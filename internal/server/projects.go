@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -288,7 +289,7 @@ func (s *Server) apiUpdateProject(w http.ResponseWriter, r *http.Request) {
 			p.Context = *body.Context
 			changed = append(changed, "context")
 		}
-		if body.Locations != nil {
+		if body.Locations != nil && !slices.Equal(*body.Locations, p.Locations) {
 			p.Locations = *body.Locations
 			changed = append(changed, "locations")
 		}
@@ -301,8 +302,10 @@ func (s *Server) apiUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !s.projectErr(w, err) {
 		return
 	}
-	s.audit(r.Context(), store.AuditEntry{LaneID: l.ID, Actor: "admin", Action: "project.update",
-		Detail: map[string]any{"name": p.Name, "revision": p.Revision, "changes": strings.Join(changed, ", ")}, Result: "ok"})
+	if len(changed) > 0 {
+		s.audit(r.Context(), store.AuditEntry{LaneID: l.ID, Actor: "admin", Action: "project.update",
+			Detail: map[string]any{"name": p.Name, "revision": p.Revision, "changes": strings.Join(changed, ", ")}, Result: "ok"})
+	}
 	writeJSON(w, http.StatusOK, s.projectView(r.Context(), p))
 }
 

@@ -19,7 +19,12 @@
 
 	$effect(() => lane.start(params.lane));
 
-	const isMachinePage = $derived(page.route.id?.includes('/machines/[machine]') ?? false);
+	// Detail pages (a machine, a project) have their own header.
+	const isMachinePage = $derived(
+		(page.route.id?.includes('/machines/[machine]') ||
+			page.route.id?.includes('/projects/[project]')) ??
+			false
+	);
 	const endpoint = $derived(mcpUrl(app.baseUrl, params.lane));
 
 	// Keep the active tab visible when the tab strip scrolls horizontally (narrow screens).
@@ -39,6 +44,11 @@
 			key: 'lane.tabs.machines',
 			href: resolve('/(app)/lanes/[lane]', { lane: params.lane }),
 			count: lane.machines?.length
+		},
+		{
+			key: 'lane.tabs.projects',
+			href: resolve('/(app)/lanes/[lane]/projects', { lane: params.lane }),
+			count: lane.projects?.length
 		},
 		{
 			key: 'lane.tabs.skills',

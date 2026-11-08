@@ -151,7 +151,18 @@ func locationState(l LocationView) string {
 		parts = append(parts, g)
 	}
 	if len(l.Info.AgentFiles) > 0 {
-		parts = append(parts, "has "+strings.Join(l.Info.AgentFiles, ", ")+": read them before working there")
+		files := make([]string, len(l.Info.AgentFiles))
+		for i, f := range l.Info.AgentFiles {
+			if name, target, ok := strings.Cut(f, " -> "); ok {
+				f = name + " (same file as " + target + ")"
+			}
+			files[i] = f
+		}
+		read := "read it before working there"
+		if len(files) > 1 {
+			read = "read them before working there"
+		}
+		parts = append(parts, "has "+strings.Join(files, ", ")+": "+read)
 	}
 	if len(parts) == 0 {
 		return "exists"
