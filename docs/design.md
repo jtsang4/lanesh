@@ -508,7 +508,13 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - `admin_sessions`：Web UI 登录会话
 - `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
 
-数据库迁移内置在二进制中，启动时自动执行。
+数据库迁移内置在二进制中，启动时自动执行，只追加新的迁移，不修改已发布的迁移。迁移 2 为审计日志的分页补齐了索引：按 Lane（以及按机器、动作、发起者筛选）倒序取一页时直接沿索引读取，不对整个 Lane 的记录排序。
+
+**列表分页**：数量会持续累积的列表由 Server 分页，前端按页加载：
+
+- 审计日志：按 ID 游标翻页（`before` 为上一页最后一条的 ID），新记录插入不会造成重复或遗漏。前端每页 50 条，"加载更多"追加下一页，并轮询最新一页。
+- 凭证：被吊销和过期的凭证会一直保留，按 `limit` / `offset` 分页，有效的排在前面，再按创建时间倒序；总数在 `X-Total-Count` 响应头中。前端 join key 和 access key 各自分页，每页 20 个。
+- 机器、Lane 和 skill 列表数量有限，不分页。
 
 ### 9.4 审计
 
@@ -525,9 +531,9 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - 每个 Lane 下：
   - 机器：在线状态、系统、版本、最后在线时间、策略；移除机器（吊销 machine credential）
   - skill：按机器浏览，渲染 `SKILL.md`，查看文件树；标出不同机器上同名 skill 的内容是否一致
-  - 凭证：发放（明文只显示一次）、吊销、最后使用时间
+  - 凭证：发放（明文只显示一次）、吊销、最后使用时间；分页显示
   - 接入片段：各系统的安装加 join 命令；Claude Code、Codex、Cursor 等客户端的 MCP 配置
-  - 活动：审计日志，可按机器、动作和凭证筛选
+  - 活动：审计日志，可按机器、动作和凭证筛选，分页加载
 - 实例信息：Server 版本、数据目录、连接数。
 
 只做查看和管理，不提供 Web 终端或在界面中执行命令。

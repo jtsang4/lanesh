@@ -1,9 +1,12 @@
 package server
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -435,12 +438,40 @@ func (s *Server) apiListKeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	keys, err := s.store.ListKeys(r.Context(), l.ID)
+	q := r.URL.Query()
+	limit, offset := pageParams(q)
+	countOnly := q.Has("limit") && limit == 0
+	if countOnly {
+		limit = 1
+	}
+	keys, total, err := s.store.QueryKeys(r.Context(), store.KeyFilter{
+		LaneID: l.ID, Kind: q.Get("kind"), Status: q.Get("status"), Limit: limit, Offset: offset,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
+	if countOnly {
+		keys = keys[:0]
+	}
+	w.Header().Set(HeaderTotalCount, strconv.Itoa(total))
 	writeJSON(w, http.StatusOK, keys)
+}
+
+// HeaderTotalCount carries the number of items matching a paged list query,
+// across all pages.
+const HeaderTotalCount = "X-Total-Count"
+
+// maxPageSize bounds the limit query parameter of paged lists.
+const maxPageSize = 200
+
+// pageParams reads limit and offset. Without a limit parameter a list returns
+// all items, so that clients that do not page keep working; limit=0 returns
+// only the counts in the headers.
+func pageParams(q url.Values) (limit, offset int) {
+	limit, _ = strconv.Atoi(q.Get("limit"))
+	offset, _ = strconv.Atoi(q.Get("offset"))
+	return min(max(limit, 0), maxPageSize), max(offset, 0)
 }
 
 func (s *Server) apiCreateKey(w http.ResponseWriter, r *http.Request) {
@@ -485,12 +516,22 @@ func (s *Server) apiRevokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("key")
+	names, _ := s.store.KeyNames(r.Context(), l.ID, []string{id})
 	if err := s.store.RevokeKey(r.Context(), l.ID, id); err != nil {
 		writeError(w, http.StatusNotFound, "key not found or already revoked")
 		return
 	}
-	s.audit(r.Context(), store.AuditEntry{LaneID: l.ID, Actor: "admin", Action: "key.revoke", Detail: map[string]any{"key_id": id}, Result: "ok"})
+	s.audit(r.Context(), store.AuditEntry{LaneID: l.ID, Actor: "admin", Action: "key.revoke", Detail: map[string]any{"key_id": id, "name": names[id]}, Result: "ok"})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// AuditView is an audit entry with the names of the key or machine that
+// acted and of the machine it concerns, resolved when it is read (keys and
+// machines that were since revoked or removed included).
+type AuditView struct {
+	store.AuditEntry
+	ActorName   string `json:"actor_name,omitempty"`
+	MachineName string `json:"machine_name,omitempty"`
 }
 
 func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
@@ -508,5 +549,47 @@ func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, s.auditViews(r.Context(), l.ID, entries))
+}
+
+func (s *Server) auditViews(ctx context.Context, laneID string, entries []store.AuditEntry) []AuditView {
+	var keyIDs, machineIDs []string
+	for _, e := range entries {
+		switch {
+		case strings.HasPrefix(e.Actor, "key_"):
+			keyIDs = append(keyIDs, e.Actor)
+		case strings.HasPrefix(e.Actor, "mch_"):
+			machineIDs = append(machineIDs, e.Actor)
+		}
+		if e.MachineID != "" {
+			machineIDs = append(machineIDs, e.MachineID)
+		}
+		if id, ok := e.Detail["key_id"].(string); ok {
+			keyIDs = append(keyIDs, id)
+		}
+	}
+	keys, _ := s.store.KeyNames(ctx, laneID, unique(keyIDs))
+	machines, _ := s.store.MachineNames(ctx, laneID, unique(machineIDs))
+	out := make([]AuditView, len(entries))
+	for i, e := range entries {
+		v := AuditView{AuditEntry: e, MachineName: machines[e.MachineID]}
+		v.ActorName = cmp.Or(keys[e.Actor], machines[e.Actor])
+		if id, ok := e.Detail["key_id"].(string); ok && e.Detail["name"] == nil && keys[id] != "" {
+			v.Detail["name"] = keys[id]
+		}
+		out[i] = v
+	}
+	return out
+}
+
+func unique(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := ids[:0:0]
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }

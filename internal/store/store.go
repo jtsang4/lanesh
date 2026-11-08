@@ -97,6 +97,17 @@ var migrations = []string{
 		result TEXT NOT NULL
 	);
 	CREATE INDEX audit_lane_ts ON audit_log(lane_id, ts);`,
+
+	// 2: indexes for paging the audit log newest first (by id), with or without
+	// a filter, and for listing a lane's keys page by page.
+	`DROP INDEX audit_lane_ts;
+	CREATE INDEX audit_lane ON audit_log(lane_id, id);
+	CREATE INDEX audit_lane_machine ON audit_log(lane_id, machine_id, id);
+	CREATE INDEX audit_lane_action ON audit_log(lane_id, action, id);
+	CREATE INDEX audit_lane_actor ON audit_log(lane_id, actor, id);
+	CREATE INDEX audit_ts ON audit_log(ts);
+	DROP INDEX keys_lane;
+	CREATE INDEX keys_lane ON keys(lane_id, kind, created_at);`,
 }
 
 // Open opens (creating if needed) the database in dataDir and migrates it.

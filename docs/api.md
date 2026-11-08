@@ -48,7 +48,7 @@ Cross-origin, cookie-authenticated, state-changing requests are rejected.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/lanes/{lane}/keys` | Join and access keys: `kind`, `name`, `prefix`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`. Tokens are never returned again. |
+| `GET` | `/lanes/{lane}/keys` | Join and access keys: `kind`, `name`, `prefix`, `created_at`, `expires_at`, `last_used_at`, `revoked_at`, active keys first and then newest first. Tokens are never returned again. Query: `kind` (`join` or `access`), `status` (`active` or `inactive`, meaning revoked or expired), `limit` (max 200; without it every key is returned, `0` returns only the count) and `offset`. `X-Total-Count` gives the number of matching keys. |
 | `POST` | `/lanes/{lane}/keys` | Body `{"kind": "join" \| "access", "name", "expires_in_days"?}`. Returns `201` with `{"key", "token"}`; the token is shown only here. |
 | `DELETE` | `/lanes/{lane}/keys/{key}` | Revokes the key. |
 
@@ -56,7 +56,7 @@ Cross-origin, cookie-authenticated, state-changing requests are rejected.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/lanes/{lane}/audit` | Newest first. Query: `machine`, `action`, `actor`, `before` (an entry ID, for pagination), `limit` (default 100, max 500). |
+| `GET` | `/lanes/{lane}/audit` | Newest first. Query: `machine`, `action`, `actor`, `before` (an entry ID: pass the last ID of a page to get the next one), `limit` (default 100, max 500). Entries include `actor_name` and `machine_name` when the actor or machine is a key or machine of the lane, including revoked keys and removed machines. |
 
 Each entry has `id`, `time`, `lane_id`, `actor` (an access key ID, a machine ID or `admin`), `action`, `machine_id`, `detail` and `result`. Actions:
 

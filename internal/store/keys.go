@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jtsang4/lanesh/internal/auth"
@@ -64,20 +65,100 @@ func scanKey(row interface{ Scan(...any) error }) (Key, error) {
 	return k, nil
 }
 
-// ListKeys returns a lane's keys, newest first.
+// ListKeys returns all of a lane's keys, newest first.
 func (s *Store) ListKeys(ctx context.Context, laneID string) ([]Key, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+keyColumns+" FROM keys WHERE lane_id = ? ORDER BY created_at DESC, id", laneID)
+	keys, _, err := s.QueryKeys(ctx, KeyFilter{LaneID: laneID})
+	return keys, err
+}
+
+// Key states for KeyFilter.Status.
+const (
+	KeyActive   = "active"   // neither revoked nor expired
+	KeyInactive = "inactive" // revoked or expired
+)
+
+// KeyFilter selects a page of a lane's keys. Limit 0 returns all of them.
+type KeyFilter struct {
+	LaneID string
+	Kind   string // KindJoin, KindAccess or "" for both
+	Status string // KeyActive, KeyInactive or "" for both
+	Limit  int
+	Offset int
+}
+
+// QueryKeys returns a page of keys, active ones first and then newest first,
+// together with the number of keys matching the filter.
+func (s *Store) QueryKeys(ctx context.Context, f KeyFilter) ([]Key, int, error) {
+	const active = "(revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?))"
+	now := s.unix()
+	where := " WHERE lane_id = ?"
+	args := []any{f.LaneID}
+	if f.Kind != "" {
+		where += " AND kind = ?"
+		args = append(args, f.Kind)
+	}
+	switch f.Status {
+	case KeyActive:
+		where += " AND " + active
+		args = append(args, now)
+	case KeyInactive:
+		where += " AND NOT " + active
+		args = append(args, now)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM keys"+where, args...).Scan(&total); err != nil { //nolint:gosec // where is built from constants.
+		return nil, 0, err
+	}
+	q := "SELECT " + keyColumns + " FROM keys" + where + " ORDER BY CASE WHEN " + active + " THEN 0 ELSE 1 END, created_at DESC, rowid DESC"
+	args = append(args, now)
+	if f.Limit > 0 {
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, f.Limit, max(f.Offset, 0))
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []Key{}
 	for rows.Next() {
 		k, err := scanKey(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, k)
+	}
+	return out, total, rows.Err()
+}
+
+// KeyNames returns the names of the given keys of a lane, revoked ones included.
+func (s *Store) KeyNames(ctx context.Context, laneID string, ids []string) (map[string]string, error) {
+	return s.names(ctx, "SELECT id, name FROM keys WHERE lane_id = ? AND id IN ", laneID, ids)
+}
+
+// names runs a query selecting (id, name) pairs for ids, appending the IN list.
+func (s *Store) names(ctx context.Context, prefix, laneID string, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := []any{laneID}
+	marks := make([]string, len(ids))
+	for i, id := range ids {
+		marks[i] = "?"
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, prefix+"("+strings.Join(marks, ",")+")", args...) //nolint:gosec // Only placeholders are appended.
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
 	}
 	return out, rows.Err()
 }

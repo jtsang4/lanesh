@@ -70,6 +70,29 @@ type AuditFilter struct {
 
 // ListAudit returns matching audit records, newest first.
 func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry, error) {
+	q, args := auditQuery(f)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AuditEntry{}
+	for rows.Next() {
+		var e AuditEntry
+		var ts int64
+		var detail string
+		if err := rows.Scan(&e.ID, &ts, &e.LaneID, &e.Actor, &e.Action, &e.MachineID, &detail, &e.Result); err != nil {
+			return nil, err
+		}
+		e.Time = time.Unix(ts, 0)
+		_ = json.Unmarshal([]byte(detail), &e.Detail)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// auditQuery builds the query for one page of the audit log, newest first.
+func auditQuery(f AuditFilter) (string, []any) {
 	q := "SELECT id, ts, lane_id, actor, action, machine_id, detail, result FROM audit_log WHERE 1=1"
 	var args []any
 	add := func(cond string, v any) {
@@ -96,25 +119,7 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry, err
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, f.Limit)
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []AuditEntry{}
-	for rows.Next() {
-		var e AuditEntry
-		var ts int64
-		var detail string
-		if err := rows.Scan(&e.ID, &ts, &e.LaneID, &e.Actor, &e.Action, &e.MachineID, &detail, &e.Result); err != nil {
-			return nil, err
-		}
-		e.Time = time.Unix(ts, 0)
-		_ = json.Unmarshal([]byte(detail), &e.Detail)
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return q, args
 }
 
 // Prune deletes audit records and sessions older than the retention period.

@@ -60,6 +60,12 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) api(method, path string, body, out any, want int) {
 	h.t.Helper()
+	h.apiHeaders(method, path, body, out, want)
+}
+
+// apiHeaders is api, returning the response headers.
+func (h *harness) apiHeaders(method, path string, body, out any, want int) http.Header {
+	h.t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
 		_ = json.NewEncoder(&buf).Encode(body)
@@ -82,6 +88,7 @@ func (h *harness) api(method, path string, body, out any, want int) {
 			h.t.Fatal(err)
 		}
 	}
+	return resp.Header
 }
 
 type machine struct {

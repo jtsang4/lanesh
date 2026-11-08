@@ -125,6 +125,12 @@ func (s *Store) MembershipByCredential(ctx context.Context, laneID, credentialHa
 	return m, err
 }
 
+// MachineNames returns the display names of the given machines of a lane,
+// including machines that were removed from it.
+func (s *Store) MachineNames(ctx context.Context, laneID string, ids []string) (map[string]string, error) {
+	return s.names(ctx, "SELECT machine_id, display_name FROM memberships WHERE lane_id = ? AND machine_id IN ", laneID, ids)
+}
+
 // ListMemberships returns a lane's active memberships ordered by name.
 func (s *Store) ListMemberships(ctx context.Context, laneID string) ([]Membership, error) {
 	rows, err := s.db.QueryContext(ctx, membershipQuery+" AND lane_id = ? ORDER BY display_name", laneID)
