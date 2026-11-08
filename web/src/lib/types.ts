@@ -142,4 +142,7 @@ export interface AuditEntry {
 	machine_id: string;
 	detail: Record<string, unknown> | null;
 	result: string;
+	/** Name of the key or machine in `actor`, when it is one. */
+	actor_name?: string;
+	machine_name?: string;
 }

@@ -12,7 +12,11 @@ export interface FreshKey {
 /** Tokens created in this browser session, kept in memory only so snippets can use them. */
 const revealed = new Map<string, Partial<Record<KeyKind, FreshKey>>>();
 
-/** Data for the lane being viewed. Machines are polled so status stays live. */
+/**
+ * Data for the lane being viewed. Machines are polled so status stays live.
+ * Keys are paged by the keys page; the lane keeps only their count, and a
+ * version that changes whenever the key lists may have.
+ */
 class LaneState {
 	id = $state('');
 	lane = $state.raw<Lane | null>(null);
@@ -21,13 +25,12 @@ class LaneState {
 	machinesError = $state.raw<unknown>(null);
 	skills = $state.raw<LaneSkill[] | null>(null);
 	skillsError = $state.raw<unknown>(null);
-	keys = $state.raw<Key[] | null>(null);
-	keysError = $state.raw<unknown>(null);
+	activeKeyCount = $state<number | null>(null);
+	keysVersion = $state(0);
 	fresh = $state.raw<Partial<Record<KeyKind, FreshKey>>>({});
 
 	onlineCount = $derived(this.machines?.filter((m) => m.online).length ?? 0);
 	machineNames = $derived(new Map((this.machines ?? []).map((m) => [m.id, m.name])));
-	keyNames = $derived(new Map((this.keys ?? []).map((k) => [k.id, k.name])));
 
 	#skillsSig: string | null = null;
 
@@ -40,14 +43,13 @@ class LaneState {
 		this.machinesError = null;
 		this.skills = null;
 		this.skillsError = null;
-		this.keys = null;
-		this.keysError = null;
+		this.activeKeyCount = null;
 		this.#skillsSig = null;
 		this.fresh = revealed.get(id) ?? {};
 
 		void this.loadLane();
 		void this.loadMachines();
-		void this.loadKeys();
+		void this.countKeys();
 		return poll(() => this.loadMachines(), 5000);
 	}
 
@@ -100,16 +102,20 @@ class LaneState {
 		}
 	}
 
-	async loadKeys() {
+	async countKeys() {
 		const id = this.id;
 		try {
-			const keys = await api.keys(id);
-			if (id !== this.id) return;
-			this.keys = keys;
-			this.keysError = null;
-		} catch (err) {
-			if (id === this.id) this.keysError = err;
+			const page = await api.keys(id, { status: 'active', limit: 0 });
+			if (id === this.id) this.activeKeyCount = page.total;
+		} catch {
+			// The count is decoration; the keys page reports errors.
 		}
+	}
+
+	/** Refreshes the key count and tells key lists to reload. */
+	keysChanged() {
+		this.keysVersion++;
+		void this.countKeys();
 	}
 
 	async createKey(kind: KeyKind, name: string, days?: number): Promise<CreatedKey> {
@@ -120,7 +126,7 @@ class LaneState {
 		};
 		revealed.set(this.id, entry);
 		this.fresh = entry;
-		this.keys = [created.key, ...(this.keys ?? [])];
+		this.keysChanged();
 		return created;
 	}
 
@@ -133,7 +139,7 @@ class LaneState {
 			revealed.set(this.id, entry);
 			this.fresh = entry;
 		}
-		await this.loadKeys();
+		this.keysChanged();
 	}
 
 	async rename(name: string) {

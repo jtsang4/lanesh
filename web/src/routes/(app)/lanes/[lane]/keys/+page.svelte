@@ -6,24 +6,67 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import RelTime from '#lib/components/RelTime.svelte';
 	import { t } from '#lib/i18n/index.svelte.ts';
-	import { keyStatus, sortKeys } from '#lib/keys.ts';
+	import Pager from '#lib/components/Pager.svelte';
+	import { api } from '#lib/api.ts';
+	import { keyStatus } from '#lib/keys.ts';
 	import { clock } from '#lib/state/clock.svelte.ts';
 	import { lane } from '#lib/state/lane.svelte.ts';
 	import { toasts } from '#lib/state/toasts.svelte.ts';
 	import type { Key, KeyKind } from '#lib/types.ts';
+	import type { PageProps } from './$types';
+
+	let { params }: PageProps = $props();
+
+	const PAGE = 20;
+	const KINDS = ['join', 'access'] as const;
 
 	let createKind = $state<KeyKind>('join');
 	let creating = $state(false);
 	let revokeTarget = $state<Key | null>(null);
 	let revoking = $state(false);
 
-	const groups = $derived.by(() => {
-		const keys = sortKeys(lane.keys ?? [], clock.now);
-		return (['join', 'access'] as const).map((kind) => ({
-			kind,
-			keys: keys.filter((k) => k.kind === kind)
-		}));
+	// Each kind is its own paged list: active keys first, then newest first.
+	type List = { keys: Key[] | null; total: number; offset: number; error: unknown; busy: boolean };
+	const blank = (): List => ({ keys: null, total: 0, offset: 0, error: null, busy: false });
+	let lists = $state<Record<KeyKind, List>>({ join: blank(), access: blank() });
+	const seq: Record<KeyKind, number> = { join: 0, access: 0 };
+
+	$effect.pre(() => {
+		void params.lane;
+		lists = { join: blank(), access: blank() };
 	});
+
+	async function load(kind: KeyKind) {
+		const list = lists[kind];
+		const mine = ++seq[kind];
+		list.busy = true;
+		try {
+			const page = await api.keys(params.lane, { kind, limit: PAGE, offset: list.offset });
+			if (mine !== seq[kind]) return;
+			if (page.items.length === 0 && list.offset > 0 && page.total > 0) {
+				list.offset = Math.floor((page.total - 1) / PAGE) * PAGE;
+				return;
+			}
+			list.keys = page.items;
+			list.total = page.total;
+			list.error = null;
+		} catch (err) {
+			if (mine === seq[kind]) list.error = err;
+		} finally {
+			if (mine === seq[kind]) list.busy = false;
+		}
+	}
+
+	for (const kind of KINDS) {
+		$effect(() => {
+			void params.lane;
+			void lists[kind].offset;
+			void lane.keysVersion;
+			void load(kind);
+		});
+	}
+
+	const failed = $derived(KINDS.find((k) => lists[k].error && !lists[k].keys));
 
 	function create(kind: KeyKind) {
 		createKind = kind;
@@ -40,11 +83,11 @@
 	<title>{lane.lane?.name ?? 'Lane'} · {t('lane.tabs.keys')} · Lanesh</title>
 </svelte:head>
 
-{#if lane.keysError && !lane.keys}
-	<ErrorState error={lane.keysError} onretry={() => lane.loadKeys()} />
+{#if failed}
+	<ErrorState error={lists[failed].error} onretry={() => KINDS.forEach((k) => load(k))} />
 {:else}
 	<div class="sections">
-		{#each groups as g (g.kind)}
+		{#each KINDS.map((kind) => ({ kind, list: lists[kind] })) as g (g.kind)}
 			<section aria-labelledby="keys-{g.kind}">
 				<div class="head">
 					<div class="titles">
@@ -62,7 +105,7 @@
 					</button>
 				</div>
 
-				{#if lane.keys === null}
+				{#if g.list.keys === null}
 					<div class="table card" aria-busy="true">
 						{#each [0, 1] as i (i)}
 							<div class="row skel">
@@ -71,12 +114,12 @@
 							</div>
 						{/each}
 					</div>
-				{:else if g.keys.length === 0}
+				{:else if g.list.keys.length === 0}
 					<div class="empty">
 						<p>{t(g.kind === 'join' ? 'keys.empty.join' : 'keys.empty.access')}</p>
 					</div>
 				{:else}
-					<div class="table card">
+					<div class={['table card', g.list.busy && 'busy']}>
 						<div class="row head-row" aria-hidden="true">
 							<span>{t('keys.colKey')}</span>
 							<span>{t('keys.colCreated')}</span>
@@ -86,7 +129,7 @@
 							<span></span>
 						</div>
 						<ul>
-							{#each g.keys as k (k.id)}
+							{#each g.list.keys as k (k.id)}
 								{@const status = keyStatus(k, clock.now)}
 								<li class={['row key', status !== 'active' && 'inactive']}>
 									<div class="who">
@@ -147,6 +190,12 @@
 							{/each}
 						</ul>
 					</div>
+					<Pager
+						total={g.list.total}
+						limit={PAGE}
+						bind:offset={lists[g.kind].offset}
+						busy={g.list.busy}
+					/>
 				{/if}
 			</section>
 		{/each}
@@ -170,6 +219,10 @@
 {/if}
 
 <style>
+	.table.busy {
+		opacity: 0.65;
+		transition: opacity var(--dur-1) var(--ease);
+	}
 	.sections {
 		display: grid;
 		gap: 40px;

@@ -41,6 +41,10 @@ export const en = {
 	'common.networkError': 'Cannot reach the Lanesh server. Check that it is running.',
 	'common.notFound': 'Not found',
 	'common.bytes': '{n} B',
+	'pager.label': 'Pages',
+	'pager.range': '{from}–{to} of {total}',
+	'pager.previous': 'Previous page',
+	'pager.next': 'Next page',
 
 	'time.justNow': 'just now',
 

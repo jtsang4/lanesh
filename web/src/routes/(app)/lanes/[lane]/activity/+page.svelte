@@ -12,7 +12,7 @@
 	import { i18n, t } from '#lib/i18n/index.svelte.ts';
 	import { lane } from '#lib/state/lane.svelte.ts';
 	import { poll } from '#lib/state/poll.ts';
-	import type { AuditEntry } from '#lib/types.ts';
+	import type { AuditEntry, Key } from '#lib/types.ts';
 	import type { PageProps } from './$types';
 
 	let { params }: PageProps = $props();
@@ -32,6 +32,28 @@
 	let loadingMore = $state(false);
 	let fresh = $state.raw(new Set<number>());
 	let seq = 0;
+
+	// Keys offered by the actor filter: the active ones. Revoked keys are
+	// reached by clicking an entry's actor.
+	let keys = $state.raw<Key[]>([]);
+	$effect(() => {
+		const id = params.lane;
+		void lane.keysVersion;
+		api.keys(id, { status: 'active', limit: 200 }).then(
+			(res) => {
+				if (id === params.lane) keys = res.items;
+				return res;
+			},
+			() => {}
+		);
+	});
+	const actorName = $derived(
+		filter.actor
+			? (keys.find((k) => k.id === filter.actor)?.name ??
+					entries?.find((e) => e.actor === filter.actor)?.actor_name ??
+					filter.actor)
+			: ''
+	);
 
 	async function load() {
 		const mine = ++seq;
@@ -128,17 +150,16 @@
 		return out;
 	});
 
-	function actorLabel(actor: string): {
+	function actorLabel(e: AuditEntry): {
 		icon: 'lock' | 'key' | 'server' | 'activity';
 		text: string;
 	} {
+		const actor = e.actor;
 		if (actor === 'admin') return { icon: 'lock', text: t('activity.admin') };
-		const key = lane.keyNames.get(actor);
-		if (key) return { icon: 'key', text: key };
-		const machine = lane.machineNames.get(actor);
-		if (machine) return { icon: 'server', text: machine };
-		if (actor.startsWith('key_')) return { icon: 'key', text: actor };
-		if (actor.startsWith('mch_')) return { icon: 'server', text: actor };
+		if (actor.startsWith('key_')) return { icon: 'key', text: e.actor_name || actor };
+		if (actor.startsWith('mch_')) {
+			return { icon: 'server', text: lane.machineNames.get(actor) ?? (e.actor_name || actor) };
+		}
 		return { icon: 'activity', text: actor };
 	}
 </script>
@@ -175,7 +196,10 @@
 					<option value={m.id}>{m.name}</option>
 				{/each}
 				{#if filter.machine && !lane.machineNames.has(filter.machine)}
-					<option value={filter.machine}>{filter.machine}</option>
+					<option value={filter.machine}
+						>{entries?.find((e) => e.machine_id === filter.machine)?.machine_name ||
+							filter.machine}</option
+					>
 				{/if}
 			</select>
 		</label>
@@ -188,9 +212,12 @@
 			>
 				<option value="">{t('activity.allActors')}</option>
 				<option value="admin">{t('activity.admin')}</option>
-				{#each lane.keys ?? [] as k (k.id)}
+				{#each keys as k (k.id)}
 					<option value={k.id}>{k.name} · {k.kind}</option>
 				{/each}
+				{#if filter.actor && filter.actor !== 'admin' && !keys.some((k) => k.id === filter.actor)}
+					<option value={filter.actor}>{actorName}</option>
+				{/if}
 			</select>
 		</label>
 		{#if filtered}
@@ -236,7 +263,7 @@
 				<ol class="card list">
 					{#each g.items as e (e.id)}
 						{@const key = actionKey(e.action)}
-						{@const actor = actorLabel(e.actor)}
+						{@const actor = actorLabel(e)}
 						{@const failed = e.result.startsWith('error')}
 						<li class={['row entry', fresh.has(e.id) && 'new']}>
 							<span class="time tnum">
@@ -257,7 +284,10 @@
 										onclick={() => setFilter('machine', e.machine_id)}
 									>
 										<Icon name="server" size={12} />
-										<span>{lane.machineNames.get(e.machine_id) ?? e.machine_id.slice(0, 12)}</span>
+										<span
+											>{lane.machineNames.get(e.machine_id) ??
+												(e.machine_name || e.machine_id.slice(0, 12))}</span
+										>
 									</button>
 								{/if}
 								<button

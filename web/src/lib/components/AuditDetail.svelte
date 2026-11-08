@@ -2,7 +2,6 @@
 	import { num, str } from '#lib/audit.ts';
 	import { bytes, platform, shortDuration } from '#lib/format.ts';
 	import { t, tn } from '#lib/i18n/index.svelte.ts';
-	import { lane } from '#lib/state/lane.svelte.ts';
 	import type { AuditEntry } from '#lib/types.ts';
 	import Badge from './Badge.svelte';
 
@@ -68,7 +67,7 @@
 		</div>
 	{:else if entry.action === 'key.revoke'}
 		<div class="meta solo">
-			<span class="strong">{lane.keyNames.get(str(d.key_id)) ?? str(d.key_id)}</span>
+			<span class="strong">{str(d.name) || str(d.key_id)}</span>
 		</div>
 	{:else if entry.action === 'lane.create' || entry.action === 'lane.delete'}
 		<div class="meta solo"><span class="strong">{str(d.name)}</span></div>

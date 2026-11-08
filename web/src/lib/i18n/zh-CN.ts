@@ -39,6 +39,10 @@ export const zhCN: Record<MessageKey, string> = {
 	'common.error': '出了点问题',
 	'common.networkError': '无法连接 Lanesh 服务，请确认它正在运行。',
 	'common.notFound': '未找到',
+	'pager.label': '分页',
+	'pager.range': '第 {from}–{to} 项，共 {total} 项',
+	'pager.previous': '上一页',
+	'pager.next': '下一页',
 	'common.bytes': '{n} B',
 
 	'time.justNow': '刚刚',

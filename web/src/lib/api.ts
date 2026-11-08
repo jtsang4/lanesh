@@ -27,6 +27,38 @@ export class ApiError extends Error {
 let redirecting = false;
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+	const res = await send(method, path, body);
+	if (res.status === 204) return undefined as T;
+	return (await res.json()) as T;
+}
+
+/** A page of a list, with the counts the server sends in response headers. */
+export interface Page<T> {
+	items: T[];
+	/** Items matching the query across all pages. */
+	total: number;
+	headers: Headers;
+}
+
+async function requestPage<T>(path: string, query: Record<string, unknown>): Promise<Page<T>> {
+	const res = await send('GET', path + queryString(query));
+	return {
+		items: (await res.json()) as T[],
+		total: Number(res.headers.get('X-Total-Count') ?? 0),
+		headers: res.headers
+	};
+}
+
+function queryString(query: Record<string, unknown>) {
+	const q = new URLSearchParams();
+	for (const [k, v] of Object.entries(query)) {
+		if (v !== undefined && v !== '' && v !== false && v !== null) q.set(k, String(v));
+	}
+	const qs = q.toString();
+	return qs ? `?${qs}` : '';
+}
+
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
 	let res: Response;
 	try {
 		res = await fetch(`/api/v1${path}`, {
@@ -52,8 +84,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 		}
 		throw new ApiError(res.status, message);
 	}
-	if (res.status === 204) return undefined as T;
-	return (await res.json()) as T;
+	return res;
 }
 
 /** Sends the user to the login page, remembering where they were. */
@@ -97,7 +128,11 @@ export const api = {
 
 	laneSkills: (lane: string) => request<LaneSkill[]>('GET', `/lanes/${enc(lane)}/skills`),
 
-	keys: (lane: string) => request<Key[]>('GET', `/lanes/${enc(lane)}/keys`),
+	/** Keys, active ones first and then newest first. */
+	keys: (
+		lane: string,
+		query: { kind?: KeyKind; status?: 'active' | 'inactive'; limit: number; offset?: number }
+	) => requestPage<Key>(`/lanes/${enc(lane)}/keys`, query),
 	createKey: (lane: string, kind: KeyKind, name: string, expiresInDays?: number) =>
 		request<CreatedKey>('POST', `/lanes/${enc(lane)}/keys`, {
 			kind,
@@ -110,10 +145,5 @@ export const api = {
 	audit: (
 		lane: string,
 		filter: { machine?: string; action?: string; actor?: string; before?: number; limit?: number }
-	) => {
-		const q = new URLSearchParams();
-		for (const [k, v] of Object.entries(filter)) if (v) q.set(k, String(v));
-		const qs = q.toString();
-		return request<AuditEntry[]>('GET', `/lanes/${enc(lane)}/audit${qs ? `?${qs}` : ''}`);
-	}
+	) => request<AuditEntry[]>('GET', `/lanes/${enc(lane)}/audit${queryString(filter)}`)
 };

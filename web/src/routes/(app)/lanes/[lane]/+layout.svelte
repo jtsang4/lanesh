@@ -21,11 +21,6 @@
 
 	const isMachinePage = $derived(page.route.id?.includes('/machines/[machine]') ?? false);
 	const endpoint = $derived(mcpUrl(app.baseUrl, params.lane));
-	const activeKeys = $derived(
-		lane.keys?.filter(
-			(k) => !k.revoked_at && !(k.expires_at && new Date(k.expires_at).getTime() < Date.now())
-		).length
-	);
 
 	// Keep the active tab visible when the tab strip scrolls horizontally (narrow screens).
 	function revealActive(node: HTMLElement) {
@@ -53,7 +48,7 @@
 		{
 			key: 'lane.tabs.keys',
 			href: resolve('/(app)/lanes/[lane]/keys', { lane: params.lane }),
-			count: activeKeys
+			count: lane.activeKeyCount ?? undefined
 		},
 		{ key: 'lane.tabs.connect', href: resolve('/(app)/lanes/[lane]/setup', { lane: params.lane }) },
 		{
