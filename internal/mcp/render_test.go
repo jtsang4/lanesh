@@ -78,43 +78,52 @@ func TestFindSkills(t *testing.T) {
 	}
 }
 
-func TestRenderTreeCollapses(t *testing.T) {
+func TestRenderTree(t *testing.T) {
 	entries := []protocol.FileEntry{
 		{Path: "SKILL.md", Size: 100},
 		{Path: "scripts", Dir: true},
 		{Path: "scripts/run.sh", Size: 10},
 		{Path: "references", Dir: true},
+		{Path: "empty", Dir: true},
 	}
-	for i := range 40 {
-		entries = append(entries, protocol.FileEntry{Path: fmt.Sprintf("references/doc-%02d.md", i), Size: 1024})
+	for i := range 200 {
+		entries = append(entries, protocol.FileEntry{Path: fmt.Sprintf("references/doc-%03d.md", i), Size: 1024})
 	}
-	lines, collapsed := renderTree("", entries)
+	// The level below the root does not fit: the small directory opens, the
+	// large one is summarized.
+	lines, collapsed, omitted := renderTree("", entries, maxTreeLines)
 	want := []string{
 		"SKILL.md (100 B)",
-		`references/ (40 files, 40.0 KB; list with path="references/")`,
+		"empty/",
+		"references/ (collapsed: 200 files, 200.0 KB)",
 		"scripts/",
 		"  run.sh (10 B)",
 	}
-	if collapsed != 1 || !reflect.DeepEqual(lines, want) {
-		t.Fatalf("collapsed=%d\n%s", collapsed, strings.Join(lines, "\n"))
+	if !reflect.DeepEqual(collapsed, []string{"references/"}) || omitted != 0 || !reflect.DeepEqual(lines, want) {
+		t.Fatalf("collapsed=%v omitted=%d\n%s", collapsed, omitted, strings.Join(lines, "\n"))
 	}
 
-	// Listing a directory shows its own files, relative to it.
-	lines, collapsed = renderTree("references", entries)
-	if collapsed != 0 || len(lines) != 40 || lines[0] != "doc-00.md (1.0 KB)" {
-		t.Fatalf("subdirectory: %d %v", collapsed, lines[:3])
+	// Listing a directory shows its own entries, relative to it, up to the budget.
+	lines, _, omitted = renderTree("references", entries, maxTreeLines)
+	if len(lines) != maxTreeLines || omitted != 50 || lines[0] != "doc-000.md (1.0 KB)" {
+		t.Fatalf("subdirectory: %d lines, %d omitted, first %q", len(lines), omitted, lines[0])
 	}
 
-	// Too many lines: every subdirectory collapses.
-	var wide []protocol.FileEntry
-	for d := range 20 {
-		for f := range 10 {
-			wide = append(wide, protocol.FileEntry{Path: fmt.Sprintf("d%02d/f%d", d, f), Size: 1})
+	// Nested directories open level by level while they fit.
+	var deep []protocol.FileEntry
+	for d := range 50 {
+		for f := range 5 {
+			deep = append(deep, protocol.FileEntry{Path: fmt.Sprintf("references/d%02d/f%d.md", d, f), Size: 1})
 		}
 	}
-	lines, collapsed = renderTree("", wide)
-	if len(lines) != 20 || collapsed != 20 {
-		t.Fatalf("wide tree: %d lines, %d collapsed", len(lines), collapsed)
+	lines, collapsed, _ = renderTree("", deep, skillTreeLines)
+	// 51 lines leave room for one more 5-file directory, and no more.
+	if len(lines) != 56 || len(collapsed) != 49 || collapsed[0] != "references/d01/" || lines[1] != "  d00/" || lines[7] != "  d01/ (collapsed: 5 files, 5 B)" {
+		t.Fatalf("deep tree: %d lines, %d collapsed\n%s", len(lines), len(collapsed), strings.Join(lines[:8], "\n"))
+	}
+	lines, collapsed, _ = renderTree("", deep, 400)
+	if len(collapsed) != 0 || len(lines) != 301 {
+		t.Fatalf("deep tree with room: %d lines, %d collapsed", len(lines), len(collapsed))
 	}
 }
 

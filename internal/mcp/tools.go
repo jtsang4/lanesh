@@ -187,7 +187,7 @@ type ReadSkillInput struct {
 	Briefing string   `json:"briefing" jsonschema:"briefing token from describe_machine"`
 	Skill    string   `json:"skill" jsonschema:"skill name"`
 	Path     string   `json:"path,omitempty" jsonschema:"file, or directory ending in /, relative to the skill"`
-	Paths    []string `json:"paths,omitempty" jsonschema:"several files to read at once"`
+	Paths    []string `json:"paths,omitempty" jsonschema:"several whole files at once (no offset/limit)"`
 	Offset   int64    `json:"offset,omitempty" jsonschema:"byte offset in path"`
 	Limit    int64    `json:"limit,omitempty" jsonschema:"bytes to read from path (default 20480)"`
 }
@@ -214,8 +214,8 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 	}
 	var out text
 	if len(in.Paths) > 0 {
-		if in.Path != "" {
-			return nil, errors.New("use path or paths, not both")
+		if in.Path != "" || in.Offset != 0 || in.Limit != 0 {
+			return nil, errors.New("paths reads whole files from the start; to read part of a file, use path with offset/limit")
 		}
 		return t.readSkillFiles(&out, m, in, read)
 	}
@@ -235,12 +235,12 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 			where = res.Path + "/"
 		}
 		out.line("[lanesh] skill %q on %q, directory %s (skill directory %s)", res.Skill, m.Name, where, res.Dir)
-		writeTree(&out, res.Path, res.Files, res.FilesTruncated)
+		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines)
 	case in.Path == "":
 		out.line("[lanesh] skill %q on %q: SKILL.md and its files (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
 		out.line("Files:")
-		writeTree(&out, "", res.Files, res.FilesTruncated)
+		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines)
 	default:
 		out.line("[lanesh] skill %q on %q (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
@@ -309,16 +309,19 @@ func writeFile(out *text, name, content, encoding string, offset, total int64, s
 	}
 }
 
-func writeTree(out *text, root string, files []protocol.FileEntry, truncated bool) {
-	lines, collapsed := renderTree(root, files)
+func writeTree(out *text, root string, files []protocol.FileEntry, truncated bool, maxLines int) {
+	lines, collapsed, omitted := renderTree(root, files, maxLines)
 	if len(lines) == 0 {
 		out.line("(empty)")
 	}
 	for _, l := range lines {
 		out.raw(l)
 	}
-	if collapsed > 0 {
-		out.line("[lanesh] %s collapsed; list one with the path shown.", plural(collapsed, "directory", "directories"))
+	if len(collapsed) > 0 {
+		out.line("[lanesh] %s collapsed to fit; list one with its path, e.g. path=%q.", plural(len(collapsed), "directory", "directories"), collapsed[0])
+	}
+	if omitted > 0 {
+		out.line("[lanesh] %d more entries not shown; use grep_skill or read files by path.", omitted)
 	}
 	if truncated {
 		out.line("[lanesh] the listing stopped at %d entries; list a subdirectory to see the rest.", len(files))

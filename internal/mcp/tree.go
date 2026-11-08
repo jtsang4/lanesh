@@ -9,12 +9,12 @@ import (
 	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
-// Tree rendering limits: directories holding more files than collapseFiles
-// are shown as one line, and if the tree is still longer than maxTreeLines,
-// every subdirectory is collapsed.
+// Line budgets for rendered trees: a directory listing, and the file tree
+// shown next to SKILL.md (smaller, since SKILL.md already takes much of the
+// result budget).
 const (
-	collapseFiles = 25
-	maxTreeLines  = 150
+	maxTreeLines   = 150
+	skillTreeLines = 60
 )
 
 type treeNode struct {
@@ -88,37 +88,72 @@ func sortedChildren(n *treeNode) []*treeNode {
 }
 
 // renderTree lists entries below root (a directory relative to the skill, or
-// "" for the skill root) as an indented tree, collapsing large directories.
-// It returns the lines and how many directories were collapsed.
-func renderTree(root string, entries []protocol.FileEntry) (lines []string, collapsed int) {
+// "" for the skill root) as an indented tree. Directories are expanded level
+// by level while the tree stays within maxLines; when a whole level does
+// not fit, its smallest directories are expanded first and deeper levels stay
+// collapsed. Collapsed directories show their file count and size; collapsed
+// holds their paths. omitted counts entries of root itself beyond maxLines.
+func renderTree(root string, entries []protocol.FileEntry, maxLines int) (lines []string, collapsed []string, omitted int) {
 	top := buildTree(root, entries)
-	render := func(threshold int, collapseAllSubdirs bool) ([]string, int) {
-		var out []string
-		folded := 0
-		var walk func(n *treeNode, rel string, depth int)
-		walk = func(n *treeNode, rel string, depth int) {
-			for _, c := range sortedChildren(n) {
-				p := path.Join(rel, c.name)
-				indent := strings.Repeat("  ", depth)
-				if !c.dir {
-					out = append(out, fmt.Sprintf("%s%s (%s)", indent, c.name, size(c.size)))
-					continue
-				}
-				if c.files > threshold || (collapseAllSubdirs && c.files > 0) {
-					out = append(out, fmt.Sprintf("%s%s/ (%s, %s; list with path=%q)", indent, c.name, plural(c.files, "file", "files"), size(c.bytes), p+"/"))
-					folded++
-					continue
-				}
-				out = append(out, indent+c.name+"/")
-				walk(c, p, depth+1)
+	open := map[*treeNode]bool{top: true}
+	visible := len(top.children)
+	level := childDirs(top)
+	for len(level) > 0 && visible < maxLines {
+		cost := 0
+		for _, d := range level {
+			cost += len(d.children)
+		}
+		if visible+cost <= maxLines {
+			var next []*treeNode
+			for _, d := range level {
+				open[d] = true
+				next = append(next, childDirs(d)...)
+			}
+			visible += cost
+			level = next
+			continue
+		}
+		sort.SliceStable(level, func(i, j int) bool { return len(level[i].children) < len(level[j].children) })
+		for _, d := range level {
+			if visible+len(d.children) <= maxLines {
+				open[d] = true
+				visible += len(d.children)
 			}
 		}
-		walk(top, root, 0)
-		return out, folded
+		break
 	}
-	lines, collapsed = render(collapseFiles, false)
-	if len(lines) > maxTreeLines {
-		lines, collapsed = render(collapseFiles, true)
+
+	var walk func(n *treeNode, rel string, depth int)
+	walk = func(n *treeNode, rel string, depth int) {
+		for _, c := range sortedChildren(n) {
+			if len(lines) >= maxLines {
+				omitted++
+				continue
+			}
+			p := path.Join(rel, c.name)
+			indent := strings.Repeat("  ", depth)
+			switch {
+			case !c.dir:
+				lines = append(lines, fmt.Sprintf("%s%s (%s)", indent, c.name, size(c.size)))
+			case open[c] || len(c.children) == 0:
+				lines = append(lines, indent+c.name+"/")
+				walk(c, p, depth+1)
+			default:
+				lines = append(lines, fmt.Sprintf("%s%s/ (collapsed: %s, %s)", indent, c.name, plural(c.files, "file", "files"), size(c.bytes)))
+				collapsed = append(collapsed, p+"/")
+			}
+		}
 	}
-	return lines, collapsed
+	walk(top, root, 0)
+	return lines, collapsed, omitted
+}
+
+func childDirs(n *treeNode) []*treeNode {
+	var out []*treeNode
+	for _, c := range sortedChildren(n) {
+		if c.dir {
+			out = append(out, c)
+		}
+	}
+	return out
 }

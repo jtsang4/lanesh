@@ -305,6 +305,9 @@ func TestEndToEnd(t *testing.T) {
 	dir := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "scripts/"})
 	mustContain(t, "read_skill directory", dir, "directory scripts/", "\ndata.txt (14 B)")
 	both := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "paths": []string{"SKILL.md", "scripts/data.txt", "missing.md"}})
+	if _, errText := call(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "paths": []string{"SKILL.md"}, "offset": 5}); !strings.Contains(errText, "use path with offset") {
+		t.Fatalf("paths with offset: %q", errText)
+	}
 	mustContain(t, "read_skill paths", both, "begin SKILL.md", "begin scripts/data.txt", "[lanesh] error: missing.md")
 	if _, errText := call(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "../../.lanesh/credentials.toml"}); errText == "" {
 		t.Fatal("path traversal must be rejected")
