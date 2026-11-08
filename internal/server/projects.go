@@ -22,7 +22,13 @@ const inspectTimeout = 3 * time.Second
 // machines at once, and reports the result per location in order.
 func (s *Server) inspectLocations(ctx context.Context, laneID string, locs []store.Location) []mcp.LocationView {
 	out := make([]mcp.LocationView, len(locs))
-	views, _ := s.machineViews(ctx, laneID)
+	views, err := s.machineViews(ctx, laneID)
+	if err != nil {
+		for i, l := range locs {
+			out[i] = mcp.LocationView{MachineID: l.MachineID, MachineName: l.MachineID, Path: l.Path, Note: "not checked: " + err.Error()}
+		}
+		return out
+	}
 	byID := make(map[string]MachineView, len(views))
 	for _, v := range views {
 		byID[v.ID] = v
@@ -122,6 +128,11 @@ func (b backend) InspectLocations(ctx context.Context, laneID string, locs []sto
 	return b.s.inspectLocations(ctx, laneID, locs)
 }
 
+func (b backend) MachineNames(ctx context.Context, laneID string, ids []string) map[string]string {
+	names, _ := b.s.store.MachineNames(ctx, laneID, ids)
+	return names
+}
+
 func (b backend) ActorName(ctx context.Context, laneID, actor string) string {
 	return b.s.actorName(ctx, laneID, actor)
 }
@@ -215,19 +226,30 @@ func (s *Server) apiGetProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.projectView(r.Context(), p))
 }
 
-// checkLocations makes sure every location names a machine of the lane.
-func (s *Server) checkLocations(ctx context.Context, laneID string, locs []store.Location) error {
+// laneMachineIDs returns the IDs of the lane's current machines.
+func (s *Server) laneMachineIDs(ctx context.Context, laneID string) (map[string]bool, error) {
 	views, err := s.machineViews(ctx, laneID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ids := make(map[string]bool, len(views))
 	for _, v := range views {
 		ids[v.ID] = true
 	}
+	return ids, nil
+}
+
+var errUnknownMachine = errors.New("a location names a machine that is not in this lane")
+
+// checkLocations makes sure every location names a machine of the lane.
+func (s *Server) checkLocations(ctx context.Context, laneID string, locs []store.Location) error {
+	ids, err := s.laneMachineIDs(ctx, laneID)
+	if err != nil {
+		return err
+	}
 	for _, l := range locs {
 		if !ids[l.MachineID] {
-			return errors.New("a location names a machine that is not in this lane")
+			return errUnknownMachine
 		}
 	}
 	return nil
@@ -273,26 +295,38 @@ func (s *Server) apiUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Locations != nil {
-		if err := s.checkLocations(r.Context(), l.ID, *body.Locations); err != nil {
-			writeError(w, http.StatusBadRequest, "%v", err)
-			return
-		}
+	// Looked up before the update, whose callback must not use the store.
+	members, err := s.laneMachineIDs(r.Context(), l.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "%v", err)
+		return
 	}
 	var changed []string
+	before := 0
 	p, err := s.store.UpdateProject(r.Context(), l.ID, r.PathValue("project"), body.BaseRevision, "admin", func(p *store.Project) error {
-		if body.Name != nil && *body.Name != p.Name {
+		before = p.Revision
+		old := *p
+		if body.Name != nil {
 			p.Name = *body.Name
-			changed = append(changed, "renamed")
 		}
-		if body.Context != nil && *body.Context != p.Context {
+		if body.Context != nil {
 			p.Context = *body.Context
-			changed = append(changed, "context")
 		}
-		if body.Locations != nil && !slices.Equal(*body.Locations, p.Locations) {
+		if body.Locations != nil {
+			// Locations the project already has may be on machines that have
+			// since left the lane; only new ones must name a current machine.
+			for _, loc := range *body.Locations {
+				loc.Path = strings.TrimSpace(loc.Path)
+				if !slices.Contains(old.Locations, loc) && !members[loc.MachineID] {
+					return errUnknownMachine
+				}
+			}
 			p.Locations = *body.Locations
-			changed = append(changed, "locations")
 		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		changed = projectChanges(old, *p)
 		return nil
 	})
 	if errors.Is(err, store.ErrStale) {
@@ -302,7 +336,7 @@ func (s *Server) apiUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !s.projectErr(w, err) {
 		return
 	}
-	if len(changed) > 0 {
+	if p.Revision != before && len(changed) > 0 {
 		s.audit(r.Context(), store.AuditEntry{LaneID: l.ID, Actor: "admin", Action: "project.update",
 			Detail: map[string]any{"name": p.Name, "revision": p.Revision, "changes": strings.Join(changed, ", ")}, Result: "ok"})
 	}
@@ -351,6 +385,21 @@ func (s *Server) apiProjectRevisions(w http.ResponseWriter, r *http.Request) {
 		out[i] = ProjectRevisionView{ProjectRevision: rev, UpdatedByName: s.actorName(r.Context(), l.ID, rev.UpdatedBy)}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// projectChanges names what differs between two versions of a project.
+func projectChanges(a, b store.Project) []string {
+	var out []string
+	if a.Name != b.Name {
+		out = append(out, "renamed")
+	}
+	if a.Context != b.Context {
+		out = append(out, "context")
+	}
+	if !slices.Equal(a.Locations, b.Locations) {
+		out = append(out, "locations")
+	}
+	return out
 }
 
 // projectErr writes the response for a project store error and reports

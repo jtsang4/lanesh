@@ -210,6 +210,9 @@ func getProject(ctx context.Context, q queryer, laneID, ref string) (Project, er
 // UpdateProject applies change to a project and saves it as a new revision.
 // With base > 0 the update fails with ErrStale unless the project is still at
 // revision base. A change that leaves the project as it was saves nothing.
+//
+// change runs inside the transaction, which holds the store's only
+// connection: it must not use the store (look up what it needs beforehand).
 func (s *Store) UpdateProject(ctx context.Context, laneID, ref string, base int, actor string, change func(*Project) error) (Project, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

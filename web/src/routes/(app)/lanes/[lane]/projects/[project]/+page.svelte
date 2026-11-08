@@ -34,6 +34,8 @@
 
 	let editing = $state(false);
 	let draft = $state('');
+	/** The revision the draft started from: saving fails if it changed since. */
+	let editBase = 0;
 	let saving = $state(false);
 	let saveError = $state('');
 	/** Set when someone else saved while we were editing. */
@@ -100,12 +102,13 @@
 	function startEdit() {
 		if (!project) return;
 		draft = project.context;
+		editBase = project.revision;
 		saveError = '';
 		stale = null;
 		editing = true;
 	}
 
-	async function save(base = project?.revision) {
+	async function save(base = editBase) {
 		if (!project) return;
 		if (draftSize > MAX_CONTEXT) {
 			saveError = t('project.contextTooLong', { limit: bytes(MAX_CONTEXT) });
@@ -120,7 +123,7 @@
 			});
 			stale = null;
 			editing = false;
-			if (p.revision !== project.revision) toasts.show(t('project.saved', { n: p.revision }));
+			if (p.revision !== base) toasts.show(t('project.saved', { n: p.revision }));
 			saved(p);
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
@@ -401,7 +404,10 @@
 								type="button"
 								class="btn btn-sm"
 								disabled={saving}
-								onclick={() => save(stale?.revision)}
+								onclick={() => {
+									editBase = stale?.revision ?? editBase;
+									void save();
+								}}
 							>
 								{t('project.saveAnyway')}
 							</button>

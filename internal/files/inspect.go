@@ -71,7 +71,7 @@ func findAgentFiles(dir string) []string {
 func gitState(dir string) (git bool, branch string, worktree bool) {
 	for d := dir; ; {
 		dotGit := filepath.Join(d, ".git")
-		if st, err := os.Lstat(dotGit); err == nil {
+		if st, err := os.Stat(dotGit); err == nil {
 			gitDir := dotGit
 			if !st.IsDir() {
 				// A linked worktree or submodule: .git is a file naming the
@@ -88,7 +88,10 @@ func gitState(dir string) (git bool, branch string, worktree bool) {
 				if !filepath.IsAbs(gitDir) {
 					gitDir = filepath.Join(d, gitDir)
 				}
-				worktree = strings.Contains(filepath.ToSlash(gitDir), "/worktrees/")
+				// A linked worktree's Git directory names the main one in
+				// commondir; a submodule's does not.
+				_, err = os.Stat(filepath.Join(gitDir, "commondir")) //nolint:gosec // Follows .git as Git does; only checks existence, under the file access policy.
+				worktree = err == nil
 			}
 			return true, headBranch(gitDir), worktree
 		}
@@ -107,6 +110,9 @@ func headBranch(gitDir string) string {
 	}
 	head := strings.TrimSpace(string(data))
 	if ref, ok := strings.CutPrefix(head, "ref: refs/heads/"); ok {
+		if ref == ".invalid" {
+			return "" // reftable storage: HEAD is a stub; the branch is not in files
+		}
 		return ref
 	}
 	if len(head) >= 7 {

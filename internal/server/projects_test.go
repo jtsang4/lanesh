@@ -114,3 +114,50 @@ func TestProjects(t *testing.T) {
 	h.api(http.MethodDelete, base+"/shop", nil, nil, http.StatusNoContent)
 	h.api(http.MethodGet, base+"/shop", nil, nil, http.StatusNotFound)
 }
+
+// TestProjectLocationsOnRemovedMachines checks that locations on machines that
+// left the lane stay removable, and do not block other changes.
+func TestProjectLocationsOnRemovedMachines(t *testing.T) {
+	h := newHarness(t)
+	h.startMachine("alpha", true)
+	h.startMachine("beta", true)
+	h.startMachine("delta", true)
+	s := h.mcpClient(h.access)
+	mustCall(t, s, "update_project", map[string]any{
+		"project": "P", "create": true,
+		"add_locations": []map[string]string{{"machine": "beta", "path": "/b"}, {"machine": "delta", "path": "/d"}},
+	})
+	var views []MachineView
+	h.api(http.MethodGet, "/api/v1/lanes/"+h.laneID+"/machines", nil, &views, http.StatusOK)
+	ids := map[string]string{}
+	for _, v := range views {
+		ids[v.Name] = v.ID
+		if v.Name != "alpha" {
+			h.api(http.MethodDelete, "/api/v1/lanes/"+h.laneID+"/machines/"+v.ID, nil, nil, http.StatusNoContent)
+		}
+	}
+	mustContain(t, "removed machines", mustCall(t, s, "get_project", map[string]any{"project": "P"}),
+		"- beta /b: the machine left the lane", "- delta /d: the machine left the lane")
+
+	// The admin API can add a location and drop one while the other stays.
+	base := "/api/v1/lanes/" + h.laneID + "/projects/P"
+	h.api(http.MethodPatch, base, map[string]any{"locations": []map[string]string{
+		{"machine_id": ids["beta"], "path": "/b"}, {"machine_id": ids["alpha"], "path": "/a"},
+	}}, nil, http.StatusOK)
+	// An agent removes the last one by the machine's (former) name.
+	mustContain(t, "remove", mustCall(t, s, "update_project", map[string]any{
+		"project": "P", "remove_locations": []map[string]string{{"machine": "beta", "path": "/b"}},
+	}), "1 location removed")
+	// New locations must still name a machine of the lane.
+	h.api(http.MethodPatch, base, map[string]any{"locations": []map[string]string{{"machine_id": ids["delta"], "path": "/d"}}}, nil, http.StatusBadRequest)
+
+	// Changes that change nothing are reported as such and not audited.
+	mustContain(t, "no-op rename", mustCall(t, s, "update_project", map[string]any{"project": "P", "rename": "P "}), `project "P" unchanged`)
+	mustContain(t, "no-op edit", mustCall(t, s, "update_project", map[string]any{"project": "P", "old_text": "", "new_text": ""}), "unchanged")
+	h.api(http.MethodPatch, base, map[string]any{"name": " P"}, nil, http.StatusOK)
+	var audit []map[string]any
+	h.api(http.MethodGet, "/api/v1/lanes/"+h.laneID+"/audit?action=project.update", nil, &audit, http.StatusOK)
+	if len(audit) != 2 {
+		t.Fatalf("project.update entries = %d, want 2: %v", len(audit), audit)
+	}
+}

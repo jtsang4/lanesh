@@ -47,11 +47,27 @@ func TestInspect(t *testing.T) {
 	wt := filepath.Join(home, "code", "app-feature")
 	gitDir := filepath.Join(repo, ".git", "worktrees", "app-feature")
 	write(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/feature/login\n")
+	write(t, filepath.Join(gitDir, "commondir"), "../..\n")
 	write(t, filepath.Join(wt, ".git"), "gitdir: "+gitDir+"\n")
 	write(t, filepath.Join(wt, ".claude", "CLAUDE.md"), "x")
 	got = Inspect(wt, home)
 	if !got.Git || !got.Worktree || got.Branch != "feature/login" || !reflect.DeepEqual(got.AgentFiles, []string{".claude/CLAUDE.md"}) {
 		t.Fatalf("worktree: %+v", got)
+	}
+
+	// A submodule: .git is a file too, but its Git directory has no commondir.
+	sm := filepath.Join(repo, "vendor", "lib")
+	smDir := filepath.Join(repo, ".git", "modules", "lib")
+	write(t, filepath.Join(smDir, "HEAD"), "ref: refs/heads/main\n")
+	write(t, filepath.Join(sm, ".git"), "gitdir: ../../.git/modules/lib\n")
+	if got := Inspect(sm, home); !got.Git || got.Worktree || got.Branch != "main" {
+		t.Fatalf("submodule: %+v", got)
+	}
+
+	// Reftable repositories keep a stub HEAD; the branch is left unknown.
+	write(t, filepath.Join(home, "rt", ".git", "HEAD"), "ref: refs/heads/.invalid\n")
+	if got := Inspect("rt", home); !got.Git || got.Branch != "" {
+		t.Fatalf("reftable: %+v", got)
 	}
 
 	// Detached HEAD, plain directories and missing paths.

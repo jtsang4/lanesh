@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jtsang4/lanesh/internal/protocol"
@@ -31,6 +32,8 @@ type Projects interface {
 	UpdateProject(ctx context.Context, laneID, ref string, base int, actor string, change func(*store.Project) error) (store.Project, error)
 	// InspectLocations checks each location on its machine, in order.
 	InspectLocations(ctx context.Context, laneID string, locs []store.Location) []LocationView
+	// MachineNames names machines of the lane, including ones that left it.
+	MachineNames(ctx context.Context, laneID string, ids []string) map[string]string
 	// ActorName names "admin" or an access key, for "updated by".
 	ActorName(ctx context.Context, laneID, actor string) string
 }
@@ -202,10 +205,6 @@ func (t *Tools) updateProject(ctx context.Context, c caller, in UpdateProjectInp
 	if err != nil {
 		return nil, err
 	}
-	remove, err := t.resolveLocations(ctx, c, in.RemoveLocations)
-	if err != nil {
-		return nil, err
-	}
 	actor := c.keyID
 	var out text
 
@@ -229,10 +228,29 @@ func (t *Tools) updateProject(ctx context.Context, c caller, in UpdateProjectInp
 		return &out, nil
 	}
 
+	// Names of the machines the project's locations name, for removals; looked
+	// up first, since the update's callback must not use the store.
+	var names map[string]string
+	if len(in.RemoveLocations) > 0 {
+		cur, err := t.backend.GetProject(ctx, c.laneID, in.Project)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, t.unknownProject(ctx, c, in.Project)
+		}
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, len(cur.Locations))
+		for i, l := range cur.Locations {
+			ids[i] = l.MachineID
+		}
+		names = t.backend.MachineNames(ctx, c.laneID, ids)
+	}
 	var changed []string
+	before := 0
 	p, err := t.backend.UpdateProject(ctx, c.laneID, in.Project, in.Revision, actor, func(p *store.Project) error {
+		before = p.Revision
 		changed = changed[:0]
-		if in.Rename != "" && in.Rename != p.Name {
+		if in.Rename != "" && strings.TrimSpace(in.Rename) != p.Name {
 			p.Name = in.Rename
 			changed = append(changed, "renamed")
 		}
@@ -257,15 +275,12 @@ func (t *Tools) updateProject(ctx context.Context, c caller, in UpdateProjectInp
 			p.Context += in.NewText
 			changed = append(changed, "context appended")
 		}
-		for _, r := range remove {
-			i := indexLocation(p.Locations, r)
-			if i < 0 {
-				return fmt.Errorf("the project has no location %s", r.Path)
-			}
-			p.Locations = append(p.Locations[:i], p.Locations[i+1:]...)
+		removed, err := removeLocations(p, in.RemoveLocations, names)
+		if err != nil {
+			return err
 		}
-		if len(remove) > 0 {
-			changed = append(changed, plural(len(remove), "location removed", "locations removed"))
+		if removed > 0 {
+			changed = append(changed, plural(removed, "location removed", "locations removed"))
 		}
 		added := 0
 		for _, a := range add {
@@ -282,19 +297,41 @@ func (t *Tools) updateProject(ctx context.Context, c caller, in UpdateProjectInp
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, t.unknownProject(ctx, c, in.Project)
 	}
-	t.auditProject(ctx, c, "project.update", p.Name, p.Revision, changed, err)
+	if err != nil {
+		t.auditProject(ctx, c, "project.update", p.Name, p.Revision, changed, err)
+	}
 	if errors.Is(err, store.ErrStale) {
 		return nil, fmt.Errorf("%w; read it again with get_project and redo your change", err)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(changed) == 0 {
+	if p.Revision == before {
 		out.line("[lanesh] project %q unchanged (revision %d).", p.Name, p.Revision)
-	} else {
-		out.line("[lanesh] project %q saved as revision %d: %s.", p.Name, p.Revision, strings.Join(changed, ", "))
+		return &out, nil
 	}
+	t.auditProject(ctx, c, "project.update", p.Name, p.Revision, changed, nil)
+	out.line("[lanesh] project %q saved as revision %d: %s.", p.Name, p.Revision, strings.Join(changed, ", "))
 	return &out, nil
+}
+
+// removeLocations removes the given locations from p. A machine is matched
+// by ID or by name (names maps machine IDs to names, including machines that
+// have left the lane, so that their locations can be removed).
+func removeLocations(p *store.Project, in []LocationInput, names map[string]string) (int, error) {
+	removed := 0
+	for _, r := range in {
+		path := strings.TrimSpace(r.Path)
+		i := slices.IndexFunc(p.Locations, func(l store.Location) bool {
+			return l.Path == path && (l.MachineID == r.Machine || strings.EqualFold(names[l.MachineID], r.Machine))
+		})
+		if i < 0 {
+			return removed, fmt.Errorf("the project has no location %s %s", r.Machine, path)
+		}
+		p.Locations = slices.Delete(p.Locations, i, i+1)
+		removed++
+	}
+	return removed, nil
 }
 
 func indexLocation(locs []store.Location, l store.Location) int {
