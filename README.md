@@ -97,7 +97,22 @@ claude mcp add --scope user --transport http lanesh https://lanesh.example.com/l
   --header "Authorization: Bearer <access-key>"
 ```
 
-`--scope user` makes Lanesh available in every project. Codex: `codex mcp add lanesh --url <mcp-url> --bearer-token-env-var LANESH_ACCESS_KEY` (global `~/.codex/config.toml`) with `LANESH_ACCESS_KEY` exported in your shell profile. Cursor: add it to the global `~/.cursor/mcp.json`. The web UI shows each of these with your lane's URL filled in.
+`--scope user` makes Lanesh available in every project.
+
+Codex: add this to the global `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.lanesh]
+url = "https://lanesh.example.com/lanes/<lane-id>/mcp"
+default_tools_approval_mode = "approve"
+
+[mcp_servers.lanesh.http_headers]
+Authorization = "Bearer <access-key>"
+```
+
+`default_tools_approval_mode = "approve"` lets Codex use Lanesh, including running commands, without asking each time; remove it to approve each call. Without it, `codex exec` rejects Lanesh commands, because nobody is there to approve them.
+
+Cursor: add it to the global `~/.cursor/mcp.json`. The web UI shows each of these with your lane's URL filled in.
 
 Any MCP client that supports Streamable HTTP works. Pass the access key as `Authorization: Bearer <access-key>`, or as `?key=<access-key>` if the client cannot set headers. If the agent's own machine is in the lane, add `?machine=<name>` so that Lanesh can tell the agent which machine is its own.
 

@@ -29,6 +29,20 @@ export function installSnippets(base: string, laneId: string, key = JOIN_PLACEHO
 	};
 }
 
+// The Codex section of ~/.codex/config.toml. The key is written into the
+// header directly, and Lanesh tools run without asking for approval each time.
+export function codexConfig(url: string, key = ACCESS_PLACEHOLDER) {
+	return [
+		'# ~/.codex/config.toml',
+		'[mcp_servers.lanesh]',
+		`url = "${url}"`,
+		'default_tools_approval_mode = "approve"',
+		'',
+		'[mcp_servers.lanesh.http_headers]',
+		`Authorization = "Bearer ${key}"`
+	].join('\n');
+}
+
 export function clientSnippets(base: string, laneId: string, key = ACCESS_PLACEHOLDER) {
 	const url = mcpUrl(base, laneId);
 	const json = JSON.stringify(
@@ -39,8 +53,7 @@ export function clientSnippets(base: string, laneId: string, key = ACCESS_PLACEH
 	return {
 		// All three are global (user-level) configurations, available in every project.
 		claude: `claude mcp add --scope user --transport http lanesh ${url} \\\n  --header "Authorization: Bearer ${key}"`,
-		codex: `codex mcp add lanesh --url ${url} \\\n  --bearer-token-env-var LANESH_ACCESS_KEY`,
-		codexEnv: `# ~/.zshrc, ~/.bashrc or your shell's profile\nexport LANESH_ACCESS_KEY="${key}"`,
+		codex: codexConfig(url, key),
 		json
 	};
 }

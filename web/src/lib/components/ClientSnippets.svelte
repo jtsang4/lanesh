@@ -27,9 +27,8 @@
 		<CodeBlock code={s.claude} />
 		<p class="note"><Rich text={t('connect.client.claudeNote')} /></p>
 	{:else if variant === 'codex'}
-		<CodeBlock code={s.codex} />
 		<p class="note"><Rich text={t('connect.client.codexNote')} /></p>
-		<CodeBlock code={s.codexEnv} />
+		<CodeBlock code={s.codex} wrap={false} />
 	{:else}
 		<p class="note"><Rich text={t('connect.client.cursorNote')} /></p>
 		<CodeBlock code={s.json} wrap={false} />

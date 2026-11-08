@@ -273,7 +273,7 @@ export const en = {
 	'connect.client.claudeNote':
 		'`--scope user` adds Lanesh to your user configuration, so it is available in every project, not only the current directory.',
 	'connect.client.codexNote':
-		'This adds Lanesh to the global `~/.codex/config.toml`. Then put the key in your shell profile so that every Codex session can read it:',
+		'Add this to the global `~/.codex/config.toml` (on Windows, `%USERPROFILE%\\.codex\\config.toml`) to use Lanesh in every project, replacing any existing `[mcp_servers.lanesh]` section. `default_tools_approval_mode = "approve"` lets Codex use Lanesh, including running commands, without asking each time; remove it to approve each call.',
 	'connect.client.cursorNote':
 		'Save this as `~/.cursor/mcp.json` to use Lanesh in every project. If the file already exists, add the `lanesh` entry to its `mcpServers`.',
 	'connect.createJoinKey': 'Create join key',

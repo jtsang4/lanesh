@@ -264,7 +264,7 @@ export const zhCN: Record<MessageKey, string> = {
 	'connect.client.claudeNote':
 		'`--scope user` 会把 Lanesh 加到用户级配置，所有项目都能使用，而不只是当前目录。',
 	'connect.client.codexNote':
-		'这条命令会写入全局的 `~/.codex/config.toml`。再把凭证写进 shell 配置文件，让每次启动的 Codex 都能读到：',
+		'把下面的内容加到全局的 `~/.codex/config.toml`（Windows 为 `%USERPROFILE%\\.codex\\config.toml`），所有项目都能使用；如果已有 `[mcp_servers.lanesh]`，替换掉它。`default_tools_approval_mode = "approve"` 让 Codex 调用 Lanesh（包括执行命令）时不再逐次确认；删掉这一行则每次调用都需要确认。',
 	'connect.client.cursorNote':
 		'保存为 `~/.cursor/mcp.json`，所有项目都能使用。如果这个文件已经存在，把 `lanesh` 这一项合并到它的 `mcpServers` 里。',
 	'connect.createJoinKey': '创建 join key',
