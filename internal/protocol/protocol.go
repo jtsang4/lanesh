@@ -39,6 +39,7 @@ const (
 	MethodFileRead        = "file.read"
 	MethodFileWrite       = "file.write"
 	MethodStat            = "file.stat"
+	MethodPathInspect     = "path.inspect"
 	MethodTransferSend    = "transfer.send"
 	MethodTransferReceive = "transfer.receive"
 )
@@ -381,6 +382,36 @@ type StatResult struct {
 	Exists bool   `json:"exists"`
 	Dir    bool   `json:"dir"`
 	Size   int64  `json:"size"`
+}
+
+// PathInspectParams asks for facts about directories, such as the locations
+// of a project.
+type PathInspectParams struct {
+	Paths []string `json:"paths"`
+}
+
+// PathInfo describes one inspected path. Path is as given; Resolved is the
+// absolute path it refers to on the machine.
+type PathInfo struct {
+	Path     string `json:"path"`
+	Resolved string `json:"resolved,omitempty"`
+	Exists   bool   `json:"exists"`
+	Dir      bool   `json:"dir,omitempty"`
+	// Git is set when the path is inside a Git working tree; Branch is its
+	// checked-out branch (or "detached at <commit>"), and Worktree is set for
+	// a linked worktree (git worktree add).
+	Git      bool   `json:"git,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Worktree bool   `json:"worktree,omitempty"`
+	// AgentFiles lists agent instruction files in the directory, such as
+	// "AGENTS.md" or "CLAUDE.md -> AGENTS.md" when one links to the other.
+	AgentFiles []string `json:"agent_files,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
+
+// PathInspectResult answers MethodPathInspect, in the order of the request.
+type PathInspectResult struct {
+	Paths []PathInfo `json:"paths"`
 }
 
 // TransferParams instructs a daemon to upload (send) or download (receive)

@@ -50,6 +50,7 @@ type Backend interface {
 	// LaneSkills returns the latest known skill index of every machine in a
 	// lane (live, or the last snapshot for offline machines), keyed by machine ID.
 	LaneSkills(ctx context.Context, laneID string) map[string]protocol.SkillIndex
+	Projects
 }
 
 // Header names understood by the MCP endpoint.
@@ -169,6 +170,10 @@ func (t *Tools) register(s *mcp.Server) {
 	add(s, tool("read_skill", "Read a skill: no path gives SKILL.md and its file tree; path is a file (offset/limit) or a directory ending in \"/\"; "+
 		"paths reads several files.", ro), t.readSkill)
 	add(s, tool("grep_skill", "Search a skill's text files for a string (or regex). Returns file:line: text.", ro), t.grepSkill)
+	add(s, tool("get_project", "A project's context (what it is, its rules, where it stands) and its locations: "+
+		"the machines and paths where it lives, a guide rather than a limit. Without project, lists projects.", ro), t.getProject)
+	add(s, tool("update_project", "Create or change a project. Prefer old_text/new_text for edits; keep the context "+
+		"short and current, since the source itself is the full record.", &mcp.ToolAnnotations{DestructiveHint: ptr(false)}), t.updateProject)
 	add(s, tool("exec", "Run a shell command on a machine. Returns when done or after timeout_ms (default 30000); "+
 		"then it keeps running as a job (job_read, job_kill). With skill, cwd is relative to the skill directory. "+
 		"stdin is closed unless background.", &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)}), t.exec)

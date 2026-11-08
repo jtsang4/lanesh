@@ -58,7 +58,7 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 	needExec := map[string]bool{
 		protocol.MethodExecStart: true, protocol.MethodJobRead: true, protocol.MethodJobWrite: true,
 		protocol.MethodJobKill: true, protocol.MethodJobList: true, protocol.MethodFileRead: true,
-		protocol.MethodFileWrite: true, protocol.MethodStat: true,
+		protocol.MethodFileWrite: true, protocol.MethodStat: true, protocol.MethodPathInspect: true,
 		protocol.MethodTransferSend: true, protocol.MethodTransferReceive: true,
 	}
 	if needExec[method] && !c.policy.AllowExec {
@@ -182,6 +182,20 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 			return nil, err
 		}
 		return files.Stat(path), nil
+
+	case protocol.MethodPathInspect:
+		p, err := decodeParams[protocol.PathInspectParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(p.Paths) > files.MaxInspectPaths {
+			return nil, fmt.Errorf("at most %d paths at once", files.MaxInspectPaths)
+		}
+		res := protocol.PathInspectResult{Paths: make([]protocol.PathInfo, len(p.Paths))}
+		for i, path := range p.Paths {
+			res.Paths[i] = files.Inspect(path, d.home)
+		}
+		return res, nil
 
 	case protocol.MethodTransferSend:
 		p, err := decodeParams[protocol.TransferParams](raw)

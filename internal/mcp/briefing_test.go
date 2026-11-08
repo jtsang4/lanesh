@@ -16,8 +16,8 @@ func TestInstructionsFitClientLimits(t *testing.T) {
 	few := Instructions([]Machine{
 		{Name: "build-box", OS: "linux", Arch: "amd64", Shell: "bash", SkillCount: 3, Online: true, Policy: protocol.Policy{AllowExec: true}},
 		{Name: "nas", OS: "linux", Arch: "arm64", SkillCount: 1, Policy: protocol.Policy{}},
-	})
-	for _, want := range []string{"- build-box: linux/amd64, bash, 3 skills", "- nas: linux/arm64, 1 skill, no exec, offline"} {
+	}, []string{"Lanesh", "博客"})
+	for _, want := range []string{"- build-box: linux/amd64, bash, 3 skills", "- nas: linux/arm64, 1 skill, no exec, offline", "get_project): Lanesh, 博客"} {
 		if !strings.Contains(few, want) {
 			t.Errorf("missing %q in:\n%s", want, few)
 		}
@@ -27,11 +27,15 @@ func TestInstructionsFitClientLimits(t *testing.T) {
 	for i := range 200 {
 		many = append(many, Machine{Name: fmt.Sprintf("machine-with-a-long-name-%03d", i), OS: "linux", Arch: "amd64", Shell: "zsh", Online: true, Policy: protocol.Policy{AllowExec: true}})
 	}
-	got := Instructions(many)
-	if len(got) > 2048 || !strings.Contains(got, "more (see list_machines)") {
+	var projects []string
+	for i := range 100 {
+		projects = append(projects, fmt.Sprintf("project-%03d", i))
+	}
+	got := Instructions(many, projects)
+	if len(got) > maxInstructions || !strings.Contains(got, "more (see list_machines)") || !strings.Contains(got, "project-000") || !strings.Contains(got, "more") {
 		t.Fatalf("instructions for 200 machines: %d characters\n%s", len(got), got[len(got)-200:])
 	}
-	if Instructions(nil) == "" || !strings.Contains(Instructions(nil), "no machines yet") {
+	if empty := Instructions(nil, nil); !strings.Contains(empty, "no machines yet") || strings.Contains(empty, "Projects") {
 		t.Fatal("empty lane instructions")
 	}
 }

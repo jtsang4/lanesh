@@ -46,6 +46,12 @@ func (s *Server) adminAPI() http.Handler {
 	authed.HandleFunc("POST /lanes/{lane}/keys", s.apiCreateKey)
 	authed.HandleFunc("DELETE /lanes/{lane}/keys/{key}", s.apiRevokeKey)
 	authed.HandleFunc("GET /lanes/{lane}/audit", s.apiAudit)
+	authed.HandleFunc("GET /lanes/{lane}/projects", s.apiListProjects)
+	authed.HandleFunc("POST /lanes/{lane}/projects", s.apiCreateProject)
+	authed.HandleFunc("GET /lanes/{lane}/projects/{project}", s.apiGetProject)
+	authed.HandleFunc("PATCH /lanes/{lane}/projects/{project}", s.apiUpdateProject)
+	authed.HandleFunc("DELETE /lanes/{lane}/projects/{project}", s.apiDeleteProject)
+	authed.HandleFunc("GET /lanes/{lane}/projects/{project}/revisions", s.apiProjectRevisions)
 	mux.Handle("/", s.requireAdmin(authed))
 
 	return http.NewCrossOriginProtection().Handler(mux)

@@ -126,7 +126,7 @@ func TestMigrateFromVersion1(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Roll the schema back to version 1, as a database from v0.1.x would be.
-	if _, err := s.db.ExecContext(ctx, `DROP INDEX audit_lane; DROP INDEX audit_lane_machine; DROP INDEX audit_lane_action;
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE project_revisions; DROP TABLE projects; DROP INDEX audit_lane; DROP INDEX audit_lane_machine; DROP INDEX audit_lane_action;
 		DROP INDEX audit_lane_actor; DROP INDEX audit_ts; DROP INDEX keys_lane;
 		CREATE INDEX audit_lane_ts ON audit_log(lane_id, ts); CREATE INDEX keys_lane ON keys(lane_id); PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)

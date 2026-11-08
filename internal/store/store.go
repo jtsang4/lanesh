@@ -108,6 +108,33 @@ var migrations = []string{
 	CREATE INDEX audit_ts ON audit_log(ts);
 	DROP INDEX keys_lane;
 	CREATE INDEX keys_lane ON keys(lane_id, kind, created_at);`,
+
+	// 3: projects. A project names where some work lives (locations: a machine
+	// and a path each, kept as JSON) and what an agent should know about it
+	// (context, free Markdown). Every change keeps a full snapshot in
+	// project_revisions, so that edits by agents can be reviewed and undone.
+	`CREATE TABLE projects (
+		id TEXT PRIMARY KEY,
+		lane_id TEXT NOT NULL REFERENCES lanes(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		context TEXT NOT NULL,
+		locations TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		updated_by TEXT NOT NULL
+	);
+	CREATE UNIQUE INDEX projects_lane_name ON projects(lane_id, name COLLATE NOCASE);
+	CREATE TABLE project_revisions (
+		project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+		revision INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		context TEXT NOT NULL,
+		locations TEXT NOT NULL,
+		updated_at INTEGER NOT NULL,
+		updated_by TEXT NOT NULL,
+		PRIMARY KEY (project_id, revision)
+	);`,
 }
 
 // Open opens (creating if needed) the database in dataDir and migrates it.
