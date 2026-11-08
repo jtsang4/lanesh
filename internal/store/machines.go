@@ -209,15 +209,17 @@ func (s *Store) SaveSkills(ctx context.Context, laneID, machineID string, idx pr
 		return err
 	}
 	if idx.Hash != "" {
-		// seen_at orders versions by when they were last current; a version
-		// that comes back (e.g. a reverted change) becomes the newest again.
-		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_history (lane_id, machine_id, hash, index_json, seen_at) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(lane_id, machine_id, hash) DO UPDATE SET seen_at = excluded.seen_at`,
-			laneID, machineID, idx.Hash, string(raw), s.now().UnixNano()); err != nil {
+		// seq orders versions by when they were last current, using a counter
+		// per machine rather than the clock (whose resolution varies by OS). A
+		// version that comes back (e.g. a reverted change) becomes the newest.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_history (lane_id, machine_id, hash, index_json, seq)
+			VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM skill_history WHERE lane_id = ? AND machine_id = ?))
+			ON CONFLICT(lane_id, machine_id, hash) DO UPDATE SET seq = excluded.seq`,
+			laneID, machineID, idx.Hash, string(raw), laneID, machineID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM skill_history WHERE lane_id = ? AND machine_id = ? AND hash NOT IN (
-			SELECT hash FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seen_at DESC LIMIT ?)`,
+			SELECT hash FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seq DESC LIMIT ?)`,
 			laneID, machineID, laneID, machineID, SkillHistoryLimit); err != nil {
 			return err
 		}
@@ -228,7 +230,7 @@ func (s *Store) SaveSkills(ctx context.Context, laneID, machineID string, idx pr
 // SkillHistory returns the recent skill index versions of a machine in a
 // lane, newest first.
 func (s *Store) SkillHistory(ctx context.Context, laneID, machineID string) ([]protocol.SkillIndex, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT index_json FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seen_at DESC",
+	rows, err := s.db.QueryContext(ctx, "SELECT index_json FROM skill_history WHERE lane_id = ? AND machine_id = ? ORDER BY seq DESC",
 		laneID, machineID)
 	if err != nil {
 		return nil, err

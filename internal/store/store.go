@@ -77,10 +77,10 @@ var migrations = []string{
 		machine_id TEXT NOT NULL,
 		hash TEXT NOT NULL,
 		index_json TEXT NOT NULL,
-		seen_at INTEGER NOT NULL,
+		seq INTEGER NOT NULL,
 		PRIMARY KEY (lane_id, machine_id, hash)
 	);
-	CREATE INDEX skill_history_recent ON skill_history(lane_id, machine_id, seen_at);
+	CREATE INDEX skill_history_recent ON skill_history(lane_id, machine_id, seq);
 	CREATE TABLE admin_sessions (
 		hash TEXT PRIMARY KEY,
 		created_at INTEGER NOT NULL,

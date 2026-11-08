@@ -464,7 +464,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - `keys`：`id`、`lane_id`、`kind`（`join` / `access`）、`name`、`hash`、`prefix`、`expires_at`、`created_at`、`last_used_at`、`revoked_at`
 - `memberships`：`lane_id`、`machine_id`、`display_name`、`credential_hash`、`os`、`arch`、`hostname`、`version`、`expose_skills`、`allow_exec`、`joined_at`、`last_seen`、`revoked_at`
 - `skill_snapshots`：`lane_id`、`machine_id`、`index_json`、`updated_at`（用于离线时在 UI 中展示）
-- `skill_history`：`lane_id`、`machine_id`、`hash`、`index_json`、`seen_at`。每个 (Lane, 机器) 保留最近 20 个 skill 索引版本，用于生成变化报告（§8.4）
+- `skill_history`：`lane_id`、`machine_id`、`hash`、`index_json`、`seq`（每台机器内单调递增的序号，不依赖时钟精度）。每个 (Lane, 机器) 保留最近 20 个 skill 索引版本，用于生成变化报告（§8.4）
 - `admin_sessions`：Web UI 登录会话
 - `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
 
