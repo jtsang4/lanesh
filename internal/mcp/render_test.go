@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -128,9 +129,10 @@ func TestRenderTree(t *testing.T) {
 }
 
 func TestWriteMachineBudget(t *testing.T) {
+	dir := filepath.Join("h", ".agents", "skills")
 	var skills []protocol.Skill
 	for i := range 400 {
-		skills = append(skills, protocol.Skill{Name: fmt.Sprintf("skill-%03d", i), Description: strings.Repeat("word ", 80), Source: "agents", Path: "/h/.agents/skills/x"})
+		skills = append(skills, protocol.Skill{Name: fmt.Sprintf("skill-%03d", i), Description: strings.Repeat("word ", 80), Source: "agents", Path: filepath.Join(dir, "x")})
 	}
 	var out text
 	writeMachine(&out, Machine{Name: "big"}, protocol.DescribeResult{Skills: protocol.SkillIndex{Skills: skills}})
@@ -138,7 +140,7 @@ func TestWriteMachineBudget(t *testing.T) {
 	if out.tokens() > skillsBudget+2000 {
 		t.Fatalf("briefing is %d tokens", out.tokens())
 	}
-	if !strings.Contains(s, "Skills (400) in /h/.agents/skills (agents):") || !strings.Contains(s, "more skills") {
+	if !strings.Contains(s, "Skills (400) in "+dir+" (agents):") || !strings.Contains(s, "more skills") {
 		t.Fatalf("budget notice missing:\n%s", s[len(s)-400:])
 	}
 	if !strings.Contains(s, "…") {
