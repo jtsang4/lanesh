@@ -194,7 +194,7 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 - `exec` 在 `timeout_ms`（等待时长，默认 30 秒，可调）内结束时，直接返回退出码和输出；超时仍未结束时，返回 `status: running` 和 `job_id`，任务转入后台继续运行。
 - `background: true` 时立即返回 `job_id`。
 - 输出写入每个任务独立的环形缓冲（stdout 和 stderr 分开，默认上限各 16MB），超出部分丢弃最早的内容并标记。任务结束后保留一段时间（默认 1 小时）供读取。
-- 返回给 Agent 的输出有内联上限（默认约 30k 字符，保留头部和尾部），完整内容可以通过 `job_read` 分段读取。
+- 返回给 Agent 的输出有内联上限（每个流默认 10,000 字节，保留头部和尾部），省略处写明省略了多少字节、用哪个 `offset` 通过 `job_read` 读取。`job_read` 每次默认读 20KB。
 - 任务记录发起它的 access key（`owner`）。`job_list` 默认只列出当前 access key 发起的任务。
 - 任务按 Lane 隔离：一个 Lane 发起的任务，只能在同一个 Lane 里读取、写入和终止。
 - 前台执行（未设置 `background`）在写完可选的 `stdin` 后立即关闭标准输入，避免命令等待输入而挂起；`background: true` 时保持标准输入打开，供 `job_write` 使用。
@@ -203,7 +203,7 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 **PTY 预留**
 
 - 执行层抽象为 `Runner` 接口，v1 只有管道实现（stdin / stdout / stderr）。
-- `exec` 的 `pty` 参数在 schema 中保留；v1 传 `true` 时返回 `unsupported` 错误。
+- 控制协议的 `exec.start` 保留 `pty` 字段，v1 传 `true` 时返回 `unsupported` 错误；MCP 的 `exec` 在支持之前不暴露这个参数，以免占用上下文。
 - 后续实现 PTY（Unix 用 pty，Windows 用 ConPTY）时不需要修改协议的整体结构。
 
 ### 5.4 文件操作
@@ -267,7 +267,8 @@ Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信�
 | 方法 | 方向 | 说明 |
 |---|---|---|
 | `machine.describe` | Server → Daemon | 返回环境信息、策略和 skill 索引 |
-| `skill.read` | Server → Daemon | 读取 skill 目录内的文件或文件树 |
+| `skill.read` | Server → Daemon | 读取 skill 目录内的文件、目录列表或文件树 |
+| `skill.grep` | Server → Daemon | 在 skill 的文本文件中搜索 |
 | `exec.start` | Server → Daemon | 启动任务 |
 | `job.read` / `job.write` / `job.kill` / `job.list` | Server → Daemon | 任务操作 |
 | `file.read` / `file.write` | Server → Daemon | 内联文件操作 |
@@ -302,7 +303,7 @@ Server ──transfer.receive(ticket)─▶ B ◀─GET /transfers/{id}/download
 
 - 端点：`https://<server>/lanes/{lane}/mcp`，使用 Streamable HTTP 传输。
 - 鉴权：`Authorization: Bearer <access key>`，或者在不支持 header 的客户端中使用 `?key=`。
-- 可选标识本机：`X-Lanesh-Machine: <machine>` 或 `?machine=<machine>`。如果 Agent 所在的机器本身也在 Lane 中，`list_machines` 会把它标记为 `self: true`，帮助 Agent 区分本地和远程。
+- 可选标识本机：`X-Lanesh-Machine: <machine>` 或 `?machine=<machine>`。如果 Agent 所在的机器本身也在 Lane 中，`list_machines` 会把它标记为 `(you)`，帮助 Agent 区分本地和远程。
 
 Claude Code 配置示例：
 
@@ -317,8 +318,8 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 `instructions` 按 Lane 动态生成（`internal/mcp/briefing.go` 中的 `Instructions`），每次建立 MCP 连接时根据 Lane 的当前状态生成：
 
-- **前 512 字符**是使用流程：先 `describe_machine` 拿简报令牌、每次调用带上令牌、调用返回简报时阅读后带新令牌重试、在 skill 所在的机器上执行脚本、用 `transfer` 在机器之间传文件。OpenAI 建议把关键信息放在 instructions 的前 512 字符。
-- **其后**是补充说明，以及连接时的机器清单：名称、系统/架构、默认 shell、skill 数量、是否禁止执行、是否离线。
+- **前 512 字符**是使用流程：`describe_machine` 查看 skill 并拿到简报令牌、调用时带上令牌、调用返回简报时说明什么都没执行并用新令牌重试、在 skill 所在的机器上执行脚本、用 `transfer` 传文件、每个结果都以结束标记收尾（见 §8.3）。OpenAI 建议把关键信息放在 instructions 的前 512 字符。
+- **其后**是连接时的机器清单：名称、系统/架构、默认 shell、skill 数量、是否禁止执行、是否离线。
 - **总长度不超过 2,000 字符**。Claude Code 只保留每个服务 instructions 的前 2,048 字符；机器太多时，清单末尾改为"还有 N 台，请调用 `list_machines`"。
 - 不包含 skill 列表和简报令牌。Agent 必须真正看过某台机器的简报，才能操作它。
 - 不能假设客户端会把 instructions 放进系统提示：规范只说"可以"，实测 Claude Code 2.1.285 把它作为第一条用户消息里的附件注入。所以 instructions 只用于引导，正确性由 §8.4 的令牌机制保证。
@@ -327,48 +328,87 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 ### 8.3 工具
 
+工具描述和参数说明遵循"最小且必要"原则：只写模型选对工具、填对参数所需的内容，因为每个连接的客户端都会把它们放进上下文。
+
+**结果格式**
+
+工具返回纯文本，不返回 JSON（不声明 output schema，也不返回 `structuredContent`）。纯文本比 JSON 省 token，模型也更容易阅读。为了让 Agent 能察觉内容缺失，所有结果都按同样的规则组织（`internal/mcp/render.go`）：
+
+- 第一行以 `[lanesh]` 开头，说明下面是什么。
+- 文件内容、命令输出等成段内容以 `[lanesh] begin <名称>` 开始、`[lanesh] end <名称>` 结束。
+- Lanesh 自己省略的内容（超出预算、超出上限、二进制文件等）都在原处用一行 `[lanesh] …` 说明省略了多少，以及怎样读取剩下的部分（例如 `read on with offset=20480`）。
+- 最后一行总是 `[lanesh] end of result`，错误结果也一样。Agent 没有看到这一行，或者看到 `begin` 却没有对应的 `end`，就说明客户端截断了结果。instructions 中写明了这条规则。
+
+结果有预算，尽量不触发客户端的截断（Claude Code、Codex 等对单次工具输出的上限大约在 1 万到 2.5 万 token）：整个结果约 7,000 token，`describe_machine` 中的 skill 列表约 5,000 token，列表中的描述最多 200 字符，单次读文件默认 20KB。
+
 所有接受 `machine` 参数的工具，机器离线时都返回明确的错误。
 
 **`list_machines()`**
 
-返回 Lane 中所有机器：`id`、`name`、`os`、`arch`、`online`、`last_seen`、`version`、`allow_exec`、`skill_count`、`self`。
+每台机器一行：名称（本机标记 `(you)`）、系统/架构、默认 shell、在线状态或最后在线时间、skill 数量、是否禁止执行。
 
 **`describe_machine(machine)`**
 
-返回机器简报：
+返回简报令牌（形如 `build-box:k3f9q2ab`，其他操作这台机器的工具都需要它，见 §8.4）和机器简报：
 
-- 环境：`os`、`arch`、`hostname`、`user`、`home`、`default_shell`、可用 shell 列表、Lanesh 版本
-- 生效的策略
-- skill 列表：`name`、`description`、`source`（`agents` 或 `claude`）、`path`（绝对路径）、`hash`
-- `shadowed`：因同名被覆盖的 skill（名称和来源）
+- 环境：系统、架构、用户、home、默认 shell 和其他可用 shell，以及生效的策略。
+- skill 列表：skill 所在目录，以及每个 skill 的名称和描述。这是 Agent 选择 skill 的主要途径：看完列表再用 `read_skill` 读相关的 skill，比关键词匹配更准确。
+- 列表超出预算时逐级降级：先只列名称，仍然太长时只给数量，并提示用 `find_skills machine=…` 查看。
+- 因同名被覆盖的 skill 单独列出。
 
-同时返回简报令牌 `briefing`（形如 `build-box:k3f9q2ab`），其他操作这台机器的工具都需要它（见 §8.4）。
+**`find_skills(query?, machine?)`**
 
-**`read_skill(machine, briefing, skill, path?, offset?, limit?)`**
+可选的低成本快速路径，不是最准确的路径。描述中写明：关键词匹配不是语义搜索，一两次查询找不到明确结果时，改用 `describe_machine`，不要反复查询。结果末尾同样提醒这一点。
 
-- 不传 `path` 时，返回 `SKILL.md` 内容、skill 目录的绝对路径，以及目录文件树（含文件大小）。
-- 传 `path`（相对 skill 目录）时，读取对应文件；只允许访问 skill 目录内的路径，拒绝路径穿越。
-- 大文件支持 `offset` / `limit` 分段读取；二进制文件以 base64 返回。
-- 只依赖 `expose_skills`，不依赖 `allow_exec`。
+- 在 Lane 内所有共享 skill 的机器上，按名称和描述匹配；离线机器使用最后一次的快照。
+- 同名 skill 合并为一行，列出所在机器，以及各机器上的内容是否一致（`identical` / `versions differ`）。
+- 只传 `machine` 时列出这台机器的全部 skill；同时传 `query` 时只在这台机器上搜索。
+- 匹配规则：
+  - 查询转为小写，按空白和标点（包括连字符）切分成词；连续的汉字切成相邻两字的组合（bigram），单个汉字保留为一个词。
+  - 每个词按命中位置计分：与名称完全相同 6 分，等于名称中以 `-`、`_`、`.` 分隔的某一段 4 分，包含在名称中 3 分，包含在描述中 1 分。
+  - 覆盖率（命中的词占全部词的比例）优先，其次是得分，最后按名称排序。覆盖率达到 50% 的 skill 都返回；没有时返回最接近的 5 个，并说明它们只是部分匹配。
+  - 结果超出预算时，说明还有多少个没有显示，并提示细化查询。不分页。
 
-**`exec(machine, briefing, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?, pty?)`**
+**`read_skill(machine, briefing, skill, path?, paths?, offset?, limit?)`**
+
+- 不传 `path`：返回 skill 目录的绝对路径、`SKILL.md` 内容和文件树。
+- `path` 是文件（相对 skill 目录）：读取该文件，默认 20KB，`offset` / `limit` 分段读取；没有读完时写明剩余字节数和下一次的 `offset`。
+- `path` 是目录（建议以 `/` 结尾）：列出该目录下的文件树。
+- `paths`：一次读取多个文件（最多 20 个），共享 20KB 预算；预算用完后没读的文件列在最后，提示下次再读。
+- 文件树带文件大小，`SKILL.md` 排在最前，然后是目录、文件。超过 25 个文件的目录折叠为一行（文件数、总大小和查看它的 `path`）；整棵树超过 150 行时折叠所有子目录。守护进程最多返回 500 个条目，超出时写明。
+- 二进制文件只说明大小，不返回内容。
+- 只允许访问 skill 目录内的路径，拒绝路径穿越；只依赖 `expose_skills`，不依赖 `allow_exec`。
+
+**`grep_skill(machine, briefing, skill, pattern, path?, regex?, case_sensitive?, max_matches?)`**
+
+- 在 skill 的文本文件中搜索，默认按字面量、不区分大小写；`regex: true` 时按 Go（RE2）正则表达式匹配。
+- 每个匹配一行 `文件:行号: 内容`，行内容最多 240 字符。默认最多 100 个匹配（上限 500），达到上限时写明还有更多。
+- 跳过二进制文件、超过 2MB 的文件（会列出）和 `node_modules`、`.git` 等目录。`path` 限定在某个文件或目录内。
+- 搜索在机器上完成（守护进程方法 `skill.grep`），不需要把文件传回 Server。
+
+**`exec(machine, briefing, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?)`**
 
 - `skill`：把工作目录设为该 skill 的目录；与 `cwd` 同时出现时，`cwd` 视为相对 skill 目录的路径。
-- 返回：`job_id`、`status`（`exited` / `running`）、`exit_code`、`stdout`、`stderr`、截断标记、耗时。
-- `pty` 在 v1 中保留，传 `true` 时返回 `unsupported`。
+- 返回状态行（退出码和耗时，或者"仍在运行"和 `job_id`）、工作目录和 shell，以及 stdout、stderr 两段输出。输出过长时保留头尾，省略处写明如何用 `job_read` 读取。
+- 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`）和终止方法。
 
-**`job_read(machine, job_id, stream?, offset?, limit?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?)`**
+**`job_read(machine, job_id, stream?, offset?, limit?, wait_ms?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?)`**
 
 - 分别用于分段读取输出、写入 stdin、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`。
+- `job_read` 写明本次读取的字节范围，以及接下来怎么做：还有更多时给出下一次的 `offset`；任务已结束并读完时说明输出结束；任务仍在运行时提示用 `wait_ms` 等待新输出。被环形缓冲丢弃的范围也会写明。
 - `job_list` 默认只列出当前 access key 发起的任务，`all: true` 列出该 Lane 在这台机器上的全部任务。
 
 **`read_file(machine, briefing, path, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**
 
-- 内联文件读写，超过内联上限时提示改用 `transfer`。
+- 内联文件读写，超过内联上限时提示改用 `transfer`。`read_file` 默认读 20KB，格式与 `read_skill` 读文件相同；二进制内容以 base64 返回。
 
 **`transfer(from_machine, from_briefing, from_path, to_machine, to_briefing, to_path, overwrite?)`**
 
 - 在两台机器之间传输文件或目录，见 §7。
+
+**与旧版本守护进程的兼容**
+
+`grep_skill` 和目录读取需要新版本的守护进程。守护进程会自动升级到 Server 的版本；升级完成之前，调用旧守护进程不支持的方法时，返回"这台机器的 Lanesh 版本较旧，会自动升级，请稍后重试"。
 
 ### 8.4 简报令牌（describe gating）
 
@@ -389,19 +429,19 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 **校验**
 
-- `read_skill`、`exec`、`read_file`、`write_file` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。`job_*` 操作已经存在的任务，不需要令牌。
+- `read_skill`、`grep_skill`、`exec`、`read_file`、`write_file` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。`job_*` 操作已经存在的任务，不需要令牌。
 - Server 先用自己缓存的机器状态校验；不匹配时向机器获取一次最新简报再校验，以免因为 Server 的缓存落后而误判。
 - 令牌缺失、错误或过时（skill 已变化）时：**不执行任何操作**，直接返回最新简报和当前令牌，形式如下。开头一行写明下一步动作：用哪个工具、哪个参数（`transfer` 是 `from_briefing` / `to_briefing`）、哪个令牌重试，并说明不需要再调用 `describe_machine`。Agent 阅读后重试一次即可：
 
   ```
-  Nothing was run on "build-box": its briefing token is unknown, or the machine's skills changed since it was issued.
-  Next step: read the briefing below, then repeat the same exec call with briefing "build-box:k3f9q2ab". This reply already is the machine's full briefing, so do not call describe_machine for it.
-
+  [lanesh] nothing was run on "build-box": no briefing token was given.
+  Next: repeat the same exec call with briefing "build-box:k3f9q2ab". This is the machine's full briefing; no describe_machine needed.
   Machine: build-box (linux/amd64), user dev, home /home/dev
-  Shell: zsh (available: bash, zsh, sh)
-  Allows: shared skills yes; commands and file access yes
-  Skills (3); read one with read_skill, run its scripts here with exec and skill set:
+  Shell: zsh (also bash, sh)
+  Allows: shared skills yes; commands and files yes
+  Skills (3) in /home/dev/.agents/skills (agents):
   - deploy-preview: …
+  [lanesh] end of result
   ```
 
 - `transfer` 两端都需要简报时，在一次返回中给出两台机器的简报。
@@ -415,7 +455,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
   ```
   Changes since your last briefing:
   + log-rotate (new)
-  ~ deploy-preview (updated; if you read it before, read it again with read_skill before relying on it)
+  ~ deploy-preview (updated; if you read it before, read it again before relying on it)
   - pdf-tools (removed)
   ```
   描述变化或任何文件内容变化都算作 updated，因为每个 skill 都有自己的内容哈希。如果只是同名 skill 的优先级发生变化，会单独说明。

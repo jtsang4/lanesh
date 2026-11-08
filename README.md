@@ -108,12 +108,16 @@ Any MCP client that supports Streamable HTTP works. Pass the access key as `Auth
 | Tool | Purpose |
 |---|---|
 | `list_machines` | Machines in the lane, their status, platform, permissions and skill counts |
-| `describe_machine` | A machine's environment, shell, permissions and installed skills, plus a **briefing token** |
-| `read_skill` | `SKILL.md`, the skill's file tree, or any file inside the skill |
+| `describe_machine` | A machine's environment, permissions and installed skills, plus a **briefing token** |
+| `find_skills` | Optional quick keyword search over skill names and descriptions on every machine |
+| `read_skill` | `SKILL.md` with the skill's file tree, a directory listing, or one or more files |
+| `grep_skill` | Search a skill's text files on its machine |
 | `exec` | Run a command; long commands continue as background jobs |
 | `job_read` / `job_write` / `job_kill` / `job_list` | Follow, feed and stop background jobs |
 | `read_file` / `write_file` | Small inline file operations |
 | `transfer` | Stream a file or directory from one machine to another |
+
+Results are compact plain text kept within a token budget. Whatever Lanesh leaves out (long output, large skill trees, the rest of a file) is stated in place with how to get it, and every result ends with `[lanesh] end of result`, so an agent can tell when its client cut a result short.
 
 Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine`. It makes the agent look at a machine's environment and skills before acting on it. When a call has no valid token (the agent forgot it, or the machine's skills changed), nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step. If the skills changed, the briefing starts with what changed since that agent's own last briefing (new, updated and removed skills), so a long-running session knows which skills to re-read while a new session simply sees the current state.
 
