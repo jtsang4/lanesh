@@ -162,6 +162,8 @@ Commands run as your user, in your login shell's environment, so tools installed
 | `LANESH_DATA_DIR` | `/data` in the image, `./data` otherwise | SQLite database location |
 | `LANESH_LISTEN` | `:8080` | Listen address |
 | `LANESH_TRANSFER_MAX_BYTES` | unlimited | Maximum size of one transfer |
+| `LANESH_TRANSFER_PART_BYTES` | 16 MiB | Largest upload request of a transfer; keep it below the request size limit of any proxy in front of the server (Cloudflare Free/Pro: 100 MB) |
+| `LANESH_TRANSFER_GZIP` | `true` | Compress transfers between daemons that support it |
 | `LANESH_AUDIT_RETENTION_DAYS` | `90` | How long audit records are kept |
 | `LANESH_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 

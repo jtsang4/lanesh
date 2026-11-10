@@ -3,8 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,15 +37,61 @@ type harness struct {
 	access string
 }
 
+// The test server sits behind a proxy that, like Cloudflare, refuses request
+// bodies above a limit; transfer parts must stay below it.
+const (
+	testPartBytes  = 64 << 10
+	testProxyLimit = 256 << 10
+)
+
+// proxyBodyLimit buffers transfer uploads like a proxy and answers 413 with
+// an HTML page when one exceeds limit. It also fails two transfer parts like
+// Cloudflare: the 3rd is refused with 502 before it reaches the server, and
+// the 5th reaches the server but its answer is replaced by a 524, so that the
+// source sends a part the server already has.
+func proxyBodyLimit(next http.Handler, limit int64) http.Handler {
+	var uploads atomic.Int64
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/transfers/") {
+			body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			if int64(len(body)) > limit {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_, _ = io.WriteString(w, "<html><body><h1>413 Payload Too Large</h1></body></html>")
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			if r.URL.Query().Get("wait") == "" {
+				switch uploads.Add(1) {
+				case 3:
+					w.WriteHeader(http.StatusBadGateway)
+					_, _ = io.WriteString(w, "<html>502 Bad Gateway</html>")
+					return
+				case 5:
+					next.ServeHTTP(httptest.NewRecorder(), r)
+					w.WriteHeader(524)
+					_, _ = io.WriteString(w, "<html>524 A timeout occurred</html>")
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, _, err := New(ctx, Config{DataDir: t.TempDir(), AdminToken: testAdminToken})
+	s, _, err := New(ctx, Config{DataDir: t.TempDir(), AdminToken: testAdminToken, TransferPartBytes: testPartBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(s.Handler())
+	ts := httptest.NewServer(proxyBodyLimit(s.Handler(), testProxyLimit))
 	t.Cleanup(func() { ts.Close(); _ = s.Close() })
 	h := &harness{t: t, ctx: ctx, srv: s, http: ts}
 
@@ -374,6 +423,34 @@ func TestEndToEnd(t *testing.T) {
 		"to_machine": "beta", "to_briefing": briefB, "to_path": "inbox/from-alpha",
 	}); !strings.Contains(errText, "exists") {
 		t.Fatalf("transfer overwrite protection: %q", errText)
+	}
+
+	// A stream larger than the proxy's limit goes through in parts, both
+	// incompressible and highly compressible content.
+	big := make([]byte, 5*testProxyLimit)
+	if _, err := rand.Read(big); err != nil {
+		t.Fatal(err)
+	}
+	text := bytes.Repeat([]byte("GET /api/chat HTTP/1.1 200 {\"ok\":true}\n"), 40000)
+	for name, data := range map[string][]byte{"big/random.bin": big, "big/log.txt": text} {
+		p := filepath.Join(a.home, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr = mustCall(t, s, "transfer", map[string]any{
+		"from_machine": "alpha", "from_briefing": briefA, "from_path": "big",
+		"to_machine": "beta", "to_briefing": briefB, "to_path": "inbox/big",
+	})
+	mustContain(t, "large transfer", tr, "copied 2 files")
+	for name, want := range map[string][]byte{"random.bin": big, "log.txt": text} {
+		got, err := os.ReadFile(filepath.Join(b.home, "inbox", "big", name))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("large transfer %s: %d bytes, want %d, %v", name, len(got), len(want), err)
+		}
 	}
 
 	// A machine that does not allow exec refuses, and says so.

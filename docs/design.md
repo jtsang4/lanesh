@@ -243,10 +243,13 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
     "machine_id": "…",
     "name": "my-mac",
     "os": "darwin", "arch": "arm64",
-    "policy": { "expose_skills": true, "allow_exec": true }
+    "policy": { "expose_skills": true, "allow_exec": true },
+    "features": ["transfer.parts", "transfer.gzip"]
   }
 }
 ```
+
+`features` 列出守护进程支持的可选能力。Server 只对声明了某项能力的守护进程使用它，旧守护进程不发送这个字段，继续按原来的方式工作。
 
 Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信息；不兼容时回复 `error`，并在必要时提示升级。
 
@@ -255,6 +258,7 @@ Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信�
 - 产品版本遵循语义化版本；协议版本是一个整数。Server 声明自己接受的协议版本范围 `[min, max]`。
 - 在同一个协议版本内，所有变更都必须是加法式的（只新增字段和方法），这样 Server 能够接受比自己新的守护进程。
 - 守护进程收到 `welcome` 后执行自动升级判断（见 §11.4）。
+- 同一协议版本内新增、需要两端配合的行为，用 `hello.features` 中的能力名协商，不按产品版本号判断。
 
 ### 6.4 心跳与重连
 
@@ -281,21 +285,34 @@ Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信�
 ```
 transfer(from=A, from_path, to=B, to_path)
 
-Server ──transfer.send(ticket)──▶ A ──POST /transfers/{id}/upload──▶ Server ──┐ io.Pipe
-Server ──transfer.receive(ticket)─▶ B ◀─GET /transfers/{id}/download── Server ◀┘
+Server ──transfer.send(ticket)──▶ A ──POST /transfers/{id}/upload?part=N──▶ Server ──┐ 内存队列（两个分段）
+Server ──transfer.receive(ticket)─▶ B ◀──GET /transfers/{id}/download─────── Server ◀┘
 ```
 
 1. Server 校验两台机器的策略，创建传输记录，生成一次性 ticket。
 2. 通过控制通道分别通知源机器和目标机器。
-3. 源机器上传，目标机器下载，两者都用 ticket 鉴权。Server 用管道直接转发，不落盘。
+3. 源机器上传，目标机器下载，两者都用 ticket 鉴权。Server 在内存中转发，不落盘；中间最多缓冲两个分段。
 4. 任一方在超时时间内没有连上，传输失败并通知另一方。
 5. 目录传输时打成 tar 流（Go `archive/tar`），保留相对路径和 Unix 权限位；在 Windows 上对权限位做近似处理。
 6. 目标机器先写入临时路径，完成并校验后再原子移动到目标路径。`overwrite` 默认为 `false`。
 7. tar 流以一个 PAX 全局头作为结束标记，普通文件无法伪造它。接收方只有读到结束标记才会替换目标路径；上传中途失败时 Server 会中断下载流。这样被截断的传输不会覆盖目标路径原有的内容。
 8. 返回文件总字节数、文件数和传输流的 sha256。
 9. 源和目标可以是同一台机器，同样经由 Server 中转。
+10. **分段上传**：Cloudflare 等代理限制单个请求体的大小（Cloudflare Free / Pro 为 100MB），超过时直接返回 413。源机器声明了 `transfer.parts` 时，Server 在 `transfer.send` 中给出 `part_bytes`（`LANESH_TRANSFER_PART_BYTES`，默认 16 MiB，范围 64 KiB 到 1 GiB），源机器把上传流切成多个请求。下载是响应体，不受这类限制，仍是一个请求。
+    - 请求依次为 `POST …/upload?part=0`、`?part=1`……每个请求体不超过 `part_bytes`，最后一个分段带 `final=1`。源机器预读一个字节来判断哪个是最后一个分段，这样目标机器可能已经写入文件之后，不会再有额外的请求。
+    - 源机器先把分段读进内存（缓冲区随数据增长）再发送，请求带 `Content-Length`。Server 也先完整读取一个分段，再放进转发队列（每个传输同时只读取一个分段：并发的请求最多等 30 秒，仍然轮不到就得到 202，等读取权和等队列空间共用这 30 秒；读取一个分段的时间有上限（至少 10 分钟，并且够 32 KiB/s 读完一个分段），无声断开的连接不会一直占着），所以中途断开的请求不会影响流：Server 按 202 应答，源机器重发；连续 5 个分段被截断时传输失败。除最后一个外，每个分段都恰好是 `part_bytes` 字节，最后一个也不会是空的；不符合的分段视为被截断（例如请求体被代理丢掉）。
+    - Server 为每个传输保留一个能容纳两个分段的转发队列，一个分段上传时，上一个分段可以同时下载。每个分段之前，源机器先发一个空的 `?part=N&wait=1`，Server 等到队列放得下一个完整分段再返回 204，源机器随后读取并发送分段，分段请求因此不需要等待。等待请求在读取分段之前发出，Server 由此立即知道源机器已经连上，不会因为第一个分段读得慢（慢速磁盘、大量小文件）而触发连接超时。目标机器比源机器慢时，等待请求最多等 30 秒，仍然放不下就返回 202，源机器再发一次等待请求；分段请求遇到队列满（正常情况下不会发生）同样等最多 30 秒后返回 202，不接收这个分段。这样任何请求都不会接近 Cloudflare 要求源站在 100 秒内响应的限制，慢的目标机器既不会让传输超时，也不会让源机器重复上传分段。“稍后再发”用 202 而不是 5xx 表示，可以通过会替换错误页面的代理。
+    - 下载的响应头在建立时立即发出。目标机器按分段收到数据，两个分段之间可能没有数据；源机器上传一个分段的时间不应超过前置代理的空闲超时（Cloudflare 为 100 秒，16 MiB 的分段对应约 170 KB/s），更慢的源机器应调小 `LANESH_TRANSFER_PART_BYTES`。
+    - 重发总是安全的：序号小于下一个期望序号的分段视为重发，直接返回成功、不重复写入；传输已失败时如实返回失败。序号跳跃让整个传输失败；结束后再到达的新分段返回 409，不影响已完成的传输。
+    - 源机器收到 202 时一直重发，直到传输结束；遇到网络错误和代理错误（408、429、500、502–504、Cloudflare 520–527）时重试，连续失败最多 7 次，间隔 1、2、4、8、16、30、30 秒（共约 90 秒，足以撑过代理或网络的短暂中断）；任何一次正常应答都会重新计数。等待请求等响应头最多 2 分钟；分段请求整体有时限（至少 12 分钟，并且够 32 KiB/s 发完一个分段），连接无声断开时也会变成可重试的错误。Lanesh 返回的其他错误表示传输已失败，不重试；证书不受信任、域名不存在这类重试无法解决的网络错误也不重试。
+    - 最后一个分段重试后仍然没有得到应答时（可能已经送达，只是应答丢了），源机器照常返回文件数和校验和。源机器返回后，Server 检查流是否已经完整到达（先等正在读取的分段，再给可能还在代理手里的最后一个分段 30 秒），没有到达就让传输失败，到达了就照常比较两端的校验和。
+    - 不带 `part` 的请求是整条流，供旧守护进程使用。
+11. **压缩**：两台机器都声明了 `transfer.gzip`、没有设置 `LANESH_TRANSFER_MAX_BYTES`、也没有用 `LANESH_TRANSFER_GZIP=false` 关闭压缩时，Server 在两端的参数中给出 `encoding: "gzip"`。设置了上限时不压缩，这样上限同时约束目标机器写入的字节数，不会被高压缩比的数据绕过。源机器用 gzip（最快档）压缩 tar 流，目标机器解压后再解包；Server 只转发字节，不解压。sha256 仍然针对未压缩的 tar 流计算，两端可以直接比较。
+12. 上传失败时，守护进程只引用 Lanesh 自己的 JSON 错误信息；代理返回的 HTML 页面不原样引用。代理返回 413 时，分段上传提示调低 `LANESH_TRANSFER_PART_BYTES`，整条上传提示升级 Server；分段上传遇到代理超时（504、Cloudflare 524）时同样提示调低分段。
 
-单次传输大小上限可通过 `LANESH_TRANSFER_MAX_BYTES` 配置。
+每个 Lane 同时最多运行 8 个传输，超出时返回错误，请稍后再试；这同时限定了传输缓冲占用的内存。
+
+单次传输大小上限可通过 `LANESH_TRANSFER_MAX_BYTES` 配置，按经过 Server 的上传字节计算，跨所有分段累计（设置上限后传输不压缩，见第 11 条）。
 
 ## 8. MCP 接口
 
@@ -523,6 +540,8 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 | `LANESH_PUBLIC_URL` | — | 对外访问地址，用于生成接入片段和安装脚本 |
 | `LANESH_ADMIN_TOKEN` | 自动生成 | 管理员凭证 |
 | `LANESH_TRANSFER_MAX_BYTES` | 不限 | 单次传输上限 |
+| `LANESH_TRANSFER_PART_BYTES` | `16777216`（16 MiB） | 传输上传时单个请求的最大字节数（64 KiB 到 1 GiB），必须小于前置代理的请求体上限；Server 为每个传输最多占用三个分段的内存（两个分段的转发队列和一个正在接收的分段，默认 48 MiB；每个 Lane 最多 8 个并发传输），源机器约两个 |
+| `LANESH_TRANSFER_GZIP` | `true` | 两端守护进程都支持时压缩传输流；在快速链路上传输已压缩的数据时可以关闭 |
 | `LANESH_AUDIT_RETENTION_DAYS` | `90` | 审计日志保留天数 |
 
 Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）终止。守护进程拒绝连接非 HTTPS 的 Server，`localhost` 除外。

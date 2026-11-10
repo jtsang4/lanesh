@@ -160,7 +160,7 @@ func (c *laneConn) session(ctx context.Context) error {
 	hello := protocol.Hello{
 		Protocol: protocol.Version, Version: version.Version, MachineID: c.d.machineID, Name: c.d.machineName(),
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Hostname: c.d.hostname, Policy: c.policy,
-		SkillsHash: idx.Hash, SkillCount: len(idx.Skills),
+		SkillsHash: idx.Hash, SkillCount: len(idx.Skills), Features: protocol.Features(),
 	}
 	if !c.policy.ExposeSkills {
 		hello.SkillsHash, hello.SkillCount = "", 0

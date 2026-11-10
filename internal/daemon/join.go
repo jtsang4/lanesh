@@ -95,11 +95,8 @@ func Join(ctx context.Context, p Paths, o JoinOptions) (JoinResult, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
-			return JoinResult{}, fmt.Errorf("join failed: %s", e.Error)
+		if e := protocol.HTTPErrorMessage(raw); e != "" {
+			return JoinResult{}, fmt.Errorf("join failed: %s", e)
 		}
 		return JoinResult{}, fmt.Errorf("join failed: %s", resp.Status)
 	}

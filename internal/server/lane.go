@@ -115,7 +115,18 @@ func (s *Server) transfer(ctx context.Context, laneID, fromID, fromPath, toID, t
 		return protocol.TransferResult{}, fmt.Errorf("destination %s already exists (set overwrite to replace it)", dst.Path)
 	}
 
-	id, ticket := s.transfers.create()
+	// Negotiate on the same connections that carry the calls, so that a
+	// machine reconnecting with another build in between cannot get an
+	// encoding it does not support.
+	from, to := s.hub.Get(laneID, fromID), s.hub.Get(laneID, toID)
+	if from == nil || to == nil {
+		return protocol.TransferResult{}, ErrOffline
+	}
+	partBytes, encoding := transferOptions(from.Hello, to.Hello, s.cfg.TransferPartBytes, s.cfg.TransferMaxBytes, !s.cfg.DisableTransferGzip)
+	id, ticket, err := s.transfers.create(laneID)
+	if err != nil {
+		return protocol.TransferResult{}, err
+	}
 	defer s.transfers.remove(id)
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Hour)
 	defer cancel()
@@ -127,25 +138,38 @@ func (s *Server) transfer(ctx context.Context, laneID, fromID, fromPath, toID, t
 	sendCh, recvCh := make(chan result, 1), make(chan result, 1)
 	go func() {
 		var r protocol.TransferResult
-		err := s.call(ctx, laneID, fromID, protocol.MethodTransferSend, protocol.TransferParams{
+		err := from.Call(ctx, protocol.MethodTransferSend, protocol.TransferParams{
 			TransferID: id, URL: "/transfers/" + id + "/upload", Ticket: ticket, Path: fromPath,
+			PartBytes: partBytes, Encoding: encoding,
 		}, &r)
-		if err != nil {
-			s.transfers.cancel(id, err)
+		switch {
+		case err != nil:
+			s.transfers.cancel(id, sideSource, err)
+		case !s.transfers.uploaded(ctx, id):
+			err = errStreamIncomplete
+			if ctx.Err() != nil {
+				err = ctx.Err() // timed out or cancelled while checking
+			}
+			s.transfers.cancel(id, sideSource, err)
 		}
 		sendCh <- result{r, err}
 	}()
 	go func() {
 		var r protocol.TransferResult
-		err := s.call(ctx, laneID, toID, protocol.MethodTransferReceive, protocol.TransferParams{
+		err := to.Call(ctx, protocol.MethodTransferReceive, protocol.TransferParams{
 			TransferID: id, URL: "/transfers/" + id + "/download", Ticket: ticket, Path: toPath, Overwrite: overwrite,
+			Encoding: encoding,
 		}, &r)
 		if err != nil {
-			s.transfers.cancel(id, err)
+			s.transfers.cancel(id, sideDestination, err)
 		}
 		recvCh <- result{r, err}
 	}()
 	sent, recv := <-sendCh, <-recvCh
+	if recv.err != nil && sent.err != nil && s.transfers.destinationFailedFirst(id) {
+		// The destination failed first, which stopped the source; say why.
+		return protocol.TransferResult{}, fmt.Errorf("destination: %w", recv.err)
+	}
 	if sent.err != nil {
 		return protocol.TransferResult{}, fmt.Errorf("source: %w", sent.err)
 	}
@@ -156,6 +180,26 @@ func (s *Server) transfer(ctx context.Context, laneID, fromID, fromPath, toID, t
 		return protocol.TransferResult{}, errors.New("checksum mismatch between source and destination")
 	}
 	return recv.res, nil
+}
+
+// errStreamIncomplete: the source finished, but the end of its stream never
+// arrived (it reports its checksum even when the answer to its final part was
+// lost).
+var errStreamIncomplete = errors.New("the stream did not arrive completely")
+
+// transferOptions picks the upload part size and stream encoding that both
+// machines support. Older daemons upload in one request, uncompressed.
+func transferOptions(from, to protocol.Hello, partBytes, maxBytes int64, gzip bool) (int64, string) {
+	if !from.HasFeature(protocol.FeatureTransferParts) {
+		partBytes = 0
+	}
+	// The transfer limit counts the bytes passing through the server; only
+	// for an uncompressed stream does it also bound what the receiver writes.
+	encoding := ""
+	if gzip && maxBytes <= 0 && from.HasFeature(protocol.FeatureTransferGzip) && to.HasFeature(protocol.FeatureTransferGzip) {
+		encoding = protocol.EncodingGzip
+	}
+	return partBytes, encoding
 }
 
 // backend adapts the server to mcp.Backend.

@@ -27,7 +27,14 @@ type Config struct {
 	// AdminToken overrides the stored admin token when set.
 	AdminToken       string
 	TransferMaxBytes int64
-	AuditRetention   time.Duration
+	// TransferPartBytes is the largest upload request of a transfer; it must
+	// stay below the request size limit of any proxy in front of the server.
+	// Zero means DefaultTransferPartBytes.
+	TransferPartBytes int64
+	// DisableTransferGzip turns off compressing transfers, for example on
+	// fast links that mostly carry already compressed data.
+	DisableTransferGzip bool
+	AuditRetention      time.Duration
 	// UI is the compiled management UI. A nil UI serves a placeholder page.
 	UI fs.FS
 }
@@ -49,11 +56,37 @@ type Server struct {
 // New opens the store and prepares the server. It returns the generated
 // admin token when one had to be created (empty otherwise).
 func New(ctx context.Context, cfg Config) (*Server, string, error) {
+	if cfg.TransferPartBytes == 0 {
+		cfg.TransferPartBytes = DefaultTransferPartBytes
+	}
+	if err := ValidateTransferPartBytes(cfg.TransferPartBytes); err != nil {
+		return nil, "", err
+	}
 	st, err := store.Open(ctx, cfg.DataDir)
 	if err != nil {
 		return nil, "", err
 	}
 	return newWithStore(ctx, cfg, st)
+}
+
+// DefaultTransferPartBytes keeps upload requests well below Cloudflare's
+// 100 MB request body limit, and small enough that a slow receiver drains one
+// part within Cloudflare's 100 s response timeout (about 170 KB/s).
+const DefaultTransferPartBytes = 16 << 20
+
+// Bounds of Config.TransferPartBytes: below the minimum, request overhead
+// dominates; the maximum is far above any proxy limit.
+const (
+	MinTransferPartBytes = 64 << 10
+	MaxTransferPartBytes = 1 << 30
+)
+
+// ValidateTransferPartBytes checks a transfer part size against its bounds.
+func ValidateTransferPartBytes(n int64) error {
+	if n < MinTransferPartBytes || n > MaxTransferPartBytes {
+		return fmt.Errorf("the transfer part size must be between %d and %d bytes", MinTransferPartBytes, MaxTransferPartBytes)
+	}
+	return nil
 }
 
 func newWithStore(ctx context.Context, cfg Config, st *store.Store) (*Server, string, error) {
@@ -63,7 +96,7 @@ func newWithStore(ctx context.Context, cfg Config, st *store.Store) (*Server, st
 	}
 	s := &Server{
 		cfg: cfg, store: st, hub: NewHub(), briefings: auth.NewBriefings(secret),
-		transfers: newTransfers(cfg.TransferMaxBytes), started: time.Now(), limiter: newLimiter(10, time.Minute),
+		transfers: newTransfers(cfg.TransferMaxBytes, cfg.TransferPartBytes), started: time.Now(), limiter: newLimiter(10, time.Minute),
 		lanes: laneServers{servers: map[string]laneServer{}},
 	}
 	generated, err := s.initAdminToken(ctx)

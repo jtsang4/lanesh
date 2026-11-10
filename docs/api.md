@@ -96,6 +96,6 @@ These are not part of the admin API but are listed for completeness:
 | `GET` | `/lanes/{lane}/connect` | machine credential | Daemon WebSocket (control protocol, see the design document §6). |
 | `DELETE` | `/lanes/{lane}/membership` | machine credential | A machine leaves the lane. |
 | `GET`, `POST`, `DELETE` | `/lanes/{lane}/mcp` | access key (`Authorization: Bearer` or `?key=`) | MCP Streamable HTTP endpoint. Optional `X-Lanesh-Machine` header or `?machine=` names the agent's own machine. |
-| `POST`, `GET` | `/transfers/{id}/upload`, `/transfers/{id}/download` | one-time ticket | Transfer data streams. |
+| `POST`, `GET` | `/transfers/{id}/upload`, `/transfers/{id}/download` | one-time ticket | Transfer data streams. Uploads may be split into `?part=N` requests, each preceded by an empty `?part=N&wait=1`, the last one with `final=1`; `202` asks for a request again (see design §7). |
 | `GET` | `/install.sh`, `/install.ps1` | none | Install scripts for the server's version. |
 | `GET` | `/healthz` | none | `{"status": "ok", "version": "…"}` |

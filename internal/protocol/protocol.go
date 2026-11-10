@@ -9,6 +9,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // Protocol versions supported by this build.
@@ -16,6 +17,35 @@ const (
 	Version    = 1
 	MinVersion = 1
 )
+
+// Features a daemon announces in Hello. They let the server use additions
+// that older daemons of the same protocol version lack.
+const (
+	// FeatureTransferParts: the daemon uploads in parts when
+	// TransferParams.PartBytes is set.
+	FeatureTransferParts = "transfer.parts"
+	// FeatureTransferGzip: the daemon compresses or decompresses the transfer
+	// stream when TransferParams.Encoding is "gzip".
+	FeatureTransferGzip = "transfer.gzip"
+)
+
+// Features returns the features daemons of this build announce.
+func Features() []string {
+	return []string{FeatureTransferParts, FeatureTransferGzip}
+}
+
+// HTTPErrorMessage returns the message of a Lanesh HTTP error response,
+// whose body is {"error": "..."}, or "" when body is something else, such as
+// a proxy's error page.
+func HTTPErrorMessage(body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) != nil {
+		return ""
+	}
+	return e.Error
+}
 
 // Message types that are not methods.
 const (
@@ -116,6 +146,13 @@ type Hello struct {
 	Policy     Policy `json:"policy"`
 	SkillsHash string `json:"skills_hash"`
 	SkillCount int    `json:"skill_count"`
+	// Features lists the optional capabilities of the daemon (Feature*).
+	Features []string `json:"features,omitempty"`
+}
+
+// HasFeature reports whether the daemon announced feature f.
+func (h Hello) HasFeature(f string) bool {
+	return slices.Contains(h.Features, f)
 }
 
 // Welcome is the server's reply to Hello.
@@ -422,7 +459,17 @@ type TransferParams struct {
 	Ticket     string `json:"ticket"`
 	Path       string `json:"path"`
 	Overwrite  bool   `json:"overwrite,omitempty"`
+	// PartBytes, when set, asks the sender to upload the stream as a series
+	// of requests of at most this many bytes each, so that proxies with a
+	// request size limit (such as Cloudflare) let it through.
+	PartBytes int64 `json:"part_bytes,omitempty"`
+	// Encoding is "gzip" when the sender compresses the tar stream and the
+	// receiver decompresses it; empty means the plain tar stream.
+	Encoding string `json:"encoding,omitempty"`
 }
+
+// EncodingGzip is the gzip-compressed transfer stream.
+const EncodingGzip = "gzip"
 
 // TransferResult answers transfer methods once the stream is complete.
 // Bytes is the total size of the transferred files; SHA256 covers the stream.

@@ -17,6 +17,8 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
 type adminConfig struct {
@@ -90,14 +92,11 @@ func (c adminClient) do(ctx context.Context, method, path string, body, out any)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		var e struct {
-			Error string `json:"error"`
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if msg := protocol.HTTPErrorMessage(raw); msg != "" {
+			return errors.New(msg)
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = resp.Status
-		}
-		return errors.New(e.Error)
+		return errors.New(resp.Status)
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent {
 		return json.NewDecoder(resp.Body).Decode(out)
