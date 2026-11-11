@@ -321,6 +321,7 @@ Server ──transfer.receive(ticket)─▶ B ◀──GET /transfers/{id}/downl
 - 端点：`https://<server>/lanes/{lane}/mcp`，使用 Streamable HTTP 传输。
 - 鉴权：`Authorization: Bearer <access key>`，或者在不支持 header 的客户端中使用 `?key=`。
 - 可选标识本机：`X-Lanesh-Machine: <machine>` 或 `?machine=<machine>`。如果 Agent 所在的机器本身也在 Lane 中，`list_machines` 会把它标记为 `(you)`，帮助 Agent 区分本地和远程。
+- SSE 心跳：客户端用 GET 打开的独立事件流平时几乎没有消息，前置代理会按空闲超时把它断开（Cloudflare 约 100 秒）。部分客户端（例如使用官方 Go SDK 的 Antigravity）在事件流连续 5 次重连都没有收到新事件后，会放弃整个会话，之后所有工具调用都会失败。因此，响应以 200 和 `text/event-stream` 开始之后，Server 每 25 秒在流里写一行 SSE 注释 `: keepalive`，与守护进程心跳的间隔相同（§6.4）。客户端会忽略注释行。心跳和事件写入共用一把锁，不会把一个事件拆开；在 SDK 写出响应头之前不发送心跳，因此不会影响它选择的状态码。没有使用 SDK 的 `KeepAlive`：它发送的是需要客户端应答的 JSON-RPC ping，不应答的客户端会被关闭会话；Server 也没有配置事件存储，ping 事件不带 ID，同样不能让客户端的重连计数归零。心跳只能防止空闲断开，事件流因为网络中断等其他原因断开时，仍然会计入客户端的重连次数。
 
 Claude Code 配置示例：
 

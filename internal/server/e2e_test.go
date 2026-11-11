@@ -83,11 +83,15 @@ func proxyBodyLimit(next http.Handler, limit int64) http.Handler {
 	})
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, opts ...func(*Config)) *harness {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, _, err := New(ctx, Config{DataDir: t.TempDir(), AdminToken: testAdminToken, TransferPartBytes: testPartBytes})
+	cfg := Config{DataDir: t.TempDir(), AdminToken: testAdminToken, TransferPartBytes: testPartBytes}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	s, _, err := New(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,9 +218,16 @@ func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (h *harness) mcpClient(token string) *sdkmcp.ClientSession {
 	h.t.Helper()
+	return h.mcpClientAt(h.http.URL, token)
+}
+
+// mcpClientAt connects to the lane's MCP endpoint through base, for example
+// a proxy in front of the test server.
+func (h *harness) mcpClientAt(base, token string) *sdkmcp.ClientSession {
+	h.t.Helper()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "1"}, nil)
 	session, err := client.Connect(h.ctx, &sdkmcp.StreamableClientTransport{
-		Endpoint:   h.http.URL + "/lanes/" + h.laneID + "/mcp",
+		Endpoint:   base + "/lanes/" + h.laneID + "/mcp",
 		HTTPClient: &http.Client{Transport: headerTransport{map[string]string{"Authorization": "Bearer " + token}}},
 	}, nil)
 	if err != nil {
@@ -597,6 +608,74 @@ func TestCancelledCallsKeepTheConnection(t *testing.T) {
 		t.Fatalf("connection lost after cancelled calls: %v", err)
 	}
 	_ = h.srv.call(h.ctx, h.laneID, id, protocol.MethodJobKill, protocol.JobKillParams{JobID: st.JobID}, nil)
+}
+
+// idleCutProxy ends a response, like Cloudflare does, when it flushes no data
+// for idle. It counts the event streams that clients open with GET.
+func idleCutProxy(next http.Handler, idle time.Duration, streams *atomic.Int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			streams.Add(1)
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		cw := &activityWriter{ResponseWriter: w, active: make(chan struct{}, 1)}
+		go func() {
+			t := time.NewTimer(idle)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-cw.active:
+					t.Reset(idle)
+				case <-t.C:
+					cancel()
+					return
+				}
+			}
+		}()
+		next.ServeHTTP(cw, r.WithContext(ctx))
+	})
+}
+
+type activityWriter struct {
+	http.ResponseWriter
+	active chan struct{}
+}
+
+// Flush marks activity: only flushed data reaches the client.
+func (w *activityWriter) Flush() {
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+	select {
+	case w.active <- struct{}{}:
+	default:
+	}
+}
+
+func (w *activityWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// MCP clients such as Antigravity give up on a session after the standalone
+// event stream is closed a few times without new events, which an idle proxy
+// does when nothing keeps the stream busy.
+func TestMCPEventStreamSurvivesIdleProxy(t *testing.T) {
+	const idle = 500 * time.Millisecond
+	h := newHarness(t, func(c *Config) { c.SSEHeartbeat = idle / 10 })
+	h.startMachine("alpha", false)
+	var streams atomic.Int64
+	proxy := httptest.NewServer(idleCutProxy(h.srv.Handler(), idle, &streams))
+	t.Cleanup(proxy.Close)
+
+	session := h.mcpClientAt(proxy.URL, h.access)
+	deadline := time.Now().Add(5 * time.Second)
+	for streams.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(4 * idle)
+	if n := streams.Load(); n != 1 {
+		t.Fatalf("the client opened %d event streams, want 1: the proxy closed the idle stream", n)
+	}
+	mustContain(t, "list_machines", mustCall(t, session, "list_machines", nil), "alpha")
 }
 
 func TestAdminAuthAndInstallScripts(t *testing.T) {

@@ -342,7 +342,7 @@ func (s *Server) mcpHandler() http.Handler {
 			Extra: map[string]any{mcp.ExtraLane: laneID, mcp.ExtraKey: key.ID},
 		}, nil
 	}
-	protected := sdkauth.RequireBearerToken(verify, nil)(handler)
+	protected := sdkauth.RequireBearerToken(verify, nil)(keepSSEAlive(handler, s.cfg.SSEHeartbeat))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if r.Header.Get("Authorization") == "" && q.Get("key") != "" {

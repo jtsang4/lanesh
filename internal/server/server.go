@@ -35,6 +35,9 @@ type Config struct {
 	// fast links that mostly carry already compressed data.
 	DisableTransferGzip bool
 	AuditRetention      time.Duration
+	// SSEHeartbeat is how often idle MCP event streams carry a heartbeat.
+	// Zero or less means DefaultSSEHeartbeat.
+	SSEHeartbeat time.Duration
 	// UI is the compiled management UI. A nil UI serves a placeholder page.
 	UI fs.FS
 }
@@ -249,11 +252,11 @@ func (r *statusRecorder) WriteHeader(code int) {
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-func (r *statusRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+func (r *statusRecorder) FlushError() error {
+	return http.NewResponseController(r.ResponseWriter).Flush()
 }
+
+func (r *statusRecorder) Flush() { _ = r.FlushError() }
 
 // logRequests logs API and daemon requests at debug level without query strings.
 func logRequests(next http.Handler) http.Handler {
