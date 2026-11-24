@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `make lint test` passes
+- [ ] `make check` passes
 - [ ] Tests cover the change
 - [ ] `docs/design.md` is updated if behaviour or interfaces changed
 - [ ] UI changes include screenshots

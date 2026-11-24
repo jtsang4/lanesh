@@ -37,6 +37,7 @@ The repository follows [golang-standards/project-layout](https://github.com/gola
 | `build/package` | Container image |
 | `build/npm` | The `lanesh` npm launcher package |
 | `deployments/` | Deployment examples |
+| `scripts/` | Local demo environment (`dev.sh`) and service / install script tests |
 | `docs/` | Design and maintainer documentation |
 
 ## Making changes

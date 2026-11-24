@@ -1,21 +1,22 @@
 # Lanesh 设计文档
 
-> 状态：v1 设计稿
-> 范围：本文档定义 Lanesh v1 的目标、架构、协议、接口、部署与发布方式，是后续实现的依据。
+> 状态：现行设计（与代码同步维护）
+> 范围：本文档定义 Lanesh 的目标、架构、协议、接口、部署与发布方式，作为实现的单一事实来源。
 
 ## 1. 概述
 
 ### 1.1 Lanesh 是什么
 
-Lanesh 把分散在多台机器上的 Agent skill 和执行环境，通过一个自托管的中心服务和一个 HTTP MCP 端点，聚合成 Agent 可以发现、按需加载和调度的统一资源池。
+Lanesh 把分散在多台机器上的 Agent skill、执行环境与共享项目上下文，通过一个自托管的中心服务和一个 HTTP MCP 端点，聚合成 Agent 可以发现、按需加载和调度的统一资源池。
 
 - 中心服务上可以创建多个 **Lane**。每个 Lane 是一组互相信任的机器。
 - 每台机器运行 Lanesh 守护进程并加入一个或多个 Lane，把本机的全局 skill 和执行能力提供给 Lane。
 - 任意 Agent 只要在 MCP 配置里填上 Lane 的 MCP URL 和凭证，就能：
   - 查看 Lane 中有哪些机器
-  - 了解某台机器的环境和已安装的全局 skill
-  - 按需读取 skill 的 `SKILL.md` 及其附属文件
+  - 了解某台机器的环境和已安装的全局 skill，或跨机器快速检索 skill
+  - 按需读取与搜索 skill 的 `SKILL.md` 及其附属文件
   - 在指定机器上执行命令、读写文件、在机器之间传输文件
+  - 读取与更新 Lane 内的项目上下文，并实时检查各项目位置的状态（路径存在性、Git 分支/worktree、`AGENTS.md` / `CLAUDE.md`）
 
 ### 1.2 要解决的问题
 
@@ -36,8 +37,8 @@ Lanesh 把分散在多台机器上的 Agent skill 和执行环境，通过一个
 
 包含：
 
-- 中心服务：Lane、凭证、机器注册、MCP 端点、审计日志、Web 管理界面
-- 守护进程：skill 发现、命令执行（含后台任务）、文件读写、跨机器文件传输
+- 中心服务：Lane、凭证、机器注册、项目与修订历史、MCP 端点、审计日志、Web 管理界面
+- 守护进程：skill 发现与搜索、命令执行（含后台任务）、文件读写、路径检查、跨机器分段压缩传输
 - 后台服务安装与管理，自动升级
 - 平台：macOS、Linux、Windows（amd64 / arm64）
 - 分发：GitHub Releases 二进制、npm 包 `lanesh`、GHCR 容器镜像
@@ -64,6 +65,7 @@ v1 不包含（见 §16 路线图）：
 | **Machine credential** | 机器加入成功后由 Server 签发的专属凭证，守护进程之后用它连接 |
 | **Access key** | Lane 级凭证，Agent 用它调用该 Lane 的 MCP 端点 |
 | **Briefing** | `describe_machine` 返回的简报令牌，其他操作该机器的工具都需要它 |
+| **Project** | Lane 内的项目记录：包含工作所在的机器与路径（Locations），以及面向 Agent 的 Markdown 说明（Context）和修订历史 |
 
 ## 3. 架构
 
@@ -73,14 +75,14 @@ v1 不包含（见 §16 路线图）：
                        │  /lanes/{lane}/connect  守护进程 WebSocket 接入              │ ◀──WS── Machine A (daemon)
  Browser ─────────────▶│  /api/v1/*  /           管理 API 与 Web UI                   │ ◀──WS── Machine B (daemon)
                        │  /transfers/{id}/*      文件传输数据流                        │ ◀──HTTP─ (传输时)
-                       │  SQLite (/data)         Lane / 凭证 / 机器 / 审计              │
+                       │  SQLite (/data)         Lane / 凭证 / 机器 / 项目 / 审计      │
                        └─────────────────────────────────────────────────────────────┘
 ```
 
 - **控制通道**：守护进程主动向 Server 建立 WebSocket 长连接（每个 Lane 成员关系一条），因此位于 NAT 或内网中的机器也能加入。Server 通过这条连接向机器下发请求并接收结果。
 - **数据通道**：文件传输时，源机器和目标机器分别对 Server 发起独立的 HTTP 请求，Server 在两者之间流式转发，不落盘。这样大文件传输不会阻塞控制通道上的命令。
 - **MCP 端点**：由 Server 直接以 Streamable HTTP 提供。消费方不需要安装任何东西。
-- **状态**：连接、MCP 会话、任务路由等运行态数据都在 Server 内存中；Lane、凭证、机器、审计日志、skill 索引快照持久化在 SQLite。
+- **状态**：连接、MCP 会话、任务路由等运行态数据都在 Server 内存中；Lane、凭证、机器、项目与修订历史、审计日志、skill 索引快照与历史版本持久化在 SQLite。
 - **单实例**：由于连接状态在内存里，Server 只支持单实例运行。对个人自托管场景这不是问题。
 
 ### 3.1 角色组合
@@ -150,7 +152,7 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 
 - `allow_exec` 默认为 `true`。`lanesh join` 时会明确提示风险，`--no-exec` 可在加入时关闭。
 - `allow_exec` 同时管控通用文件读写和传输，因为能任意写文件就等同于能执行命令。
-- 策略也可以按 Lane 覆盖（`[lanes.<lane-id>.policy]`）。
+- 策略也可以按 Lane 覆盖（在对应 `[[lanes]]` 条目下配置 `[lanes.policy]`）。
 - `describe_machine` 会返回当前生效的策略，让 Agent 知道这台机器能做什么。
 
 ## 5. 守护进程
@@ -162,7 +164,10 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
   bin/lanesh[.exe]         # 受管二进制，后台服务从这里运行
   config.toml              # 机器名、策略、更新设置、已加入的 Lane
   credentials.toml         # machine credential（0600）
+  admin.toml               # `lanesh admin login` 保存的管理员凭证（0600）
   machine-id
+  daemon.lock              # 守护进程单实例锁文件
+  state.json               # 守护进程运行态，供 `lanesh status` / `doctor` 读取
   logs/daemon.log
   logs/audit.log           # 本机执行与文件操作的审计记录
 ```
@@ -276,6 +281,8 @@ Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信�
 | `exec.start` | Server → Daemon | 启动任务 |
 | `job.read` / `job.write` / `job.kill` / `job.list` | Server → Daemon | 任务操作 |
 | `file.read` / `file.write` | Server → Daemon | 内联文件操作 |
+| `file.stat` | Server → Daemon | 查询路径是否存在、是否为目录与大小（用于传输前检查） |
+| `path.inspect` | Server → Daemon | 批量检查项目位置的存在性、Git 分支/worktree 与 `AGENTS.md` / `CLAUDE.md` |
 | `transfer.send` / `transfer.receive` | Server → Daemon | 指示守护进程向数据通道上传或从中下载 |
 | `skills.changed` | Daemon → Server | 推送 skill 索引变更 |
 | `job.exited` | Daemon → Server | 任务结束通知（用于审计） |
@@ -543,7 +550,8 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 | `LANESH_TRANSFER_MAX_BYTES` | 不限 | 单次传输上限 |
 | `LANESH_TRANSFER_PART_BYTES` | `16777216`（16 MiB） | 传输上传时单个请求的最大字节数（64 KiB 到 1 GiB），必须小于前置代理的请求体上限；Server 为每个传输最多占用三个分段的内存（两个分段的转发队列和一个正在接收的分段，默认 48 MiB；每个 Lane 最多 8 个并发传输），源机器约两个 |
 | `LANESH_TRANSFER_GZIP` | `true` | 两端守护进程都支持时压缩传输流；在快速链路上传输已压缩的数据时可以关闭 |
-| `LANESH_AUDIT_RETENTION_DAYS` | `90` | 审计日志保留天数 |
+| `LANESH_AUDIT_RETENTION_DAYS` | `90` | 审计日志保留天数（`0` 表示永久保留） |
+| `LANESH_LOG_LEVEL` | `info` | 日志级别：`debug`、`info`、`warn` 或 `error` |
 
 Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）终止。守护进程拒绝连接非 HTTPS 的 Server，`localhost` 除外。
 
@@ -551,6 +559,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 
 使用 SQLite（纯 Go 驱动，不依赖 CGO，便于交叉编译）。主要数据表：
 
+- `meta`：实例级键值元数据（自动生成的管理员令牌哈希、简报令牌 HMAC 密钥等）
 - `lanes`：`id`、`name`、`created_at`
 - `keys`：`id`、`lane_id`、`kind`（`join` / `access`）、`name`、`hash`、`prefix`、`expires_at`、`created_at`、`last_used_at`、`revoked_at`
 - `memberships`：`lane_id`、`machine_id`、`display_name`、`credential_hash`、`os`、`arch`、`hostname`、`version`、`expose_skills`、`allow_exec`、`joined_at`、`last_seen`、`revoked_at`
@@ -558,7 +567,7 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 - `skill_history`：`lane_id`、`machine_id`、`hash`、`index_json`、`seq`（每台机器内单调递增的序号，不依赖时钟精度）。每个 (Lane, 机器) 保留最近 20 个 skill 索引版本，用于生成变化报告（§8.4）
 - `admin_sessions`：Web UI 登录会话
 - `projects`：`id`、`lane_id`、`name`、`context`、`locations`（JSON：机器 ID 和路径）、`revision`、`created_at`、`updated_at`、`updated_by`；`project_revisions` 保存每个修订的完整快照，保留最近 20 个（迁移 3）
-- `audit_log`：`ts`、`lane_id`、`actor`（access key ID 与 MCP session ID）、`action`、`machine_id`、`detail`、`result`
+- `audit_log`：`id`、`ts`、`lane_id`、`actor`（access/join key ID、machine ID 或 `admin`）、`action`、`machine_id`、`detail`、`result`
 
 数据库迁移内置在二进制中，启动时自动执行，只追加新的迁移，不修改已发布的迁移。迁移 2 为审计日志的分页补齐了索引：按 Lane（以及按机器、动作、发起者筛选）倒序取一页时直接沿索引读取，不对整个 Lane 的记录排序。
 
@@ -689,6 +698,9 @@ Windows 有两处特殊处理：
 | `lanesh machine list` / `remove` | 查看或移除 Lane 中的机器 |
 | `lanesh daemon [--supervise]` | 守护进程本体，由后台服务调用 |
 | `lanesh healthcheck` | 请求本地 `/healthz`，供容器健康检查使用 |
+| `lanesh version [--short]` | 输出版本、提交哈希与构建时间 |
+
+所有命令均支持全局参数 `--home <dir>`（默认 `$LANESH_HOME` 或 `~/.lanesh`）。
 
 ## 12. 部署
 
@@ -705,9 +717,10 @@ services:
   lanesh:
     image: ghcr.io/jtsang4/lanesh:latest
     command: ["server"]
+    restart: unless-stopped
     environment:
       LANESH_PUBLIC_URL: https://lanesh.example.com
-      LANESH_ADMIN_TOKEN: ${LANESH_ADMIN_TOKEN}
+      LANESH_ADMIN_TOKEN: ${LANESH_ADMIN_TOKEN:-}
     volumes:
       - lanesh-data:/data
     ports:
@@ -736,7 +749,7 @@ LANESH_PUBLIC_URL=https://lanesh.example.com lanesh server
   - 构建多架构镜像，推送到 GHCR
 - **npm**：独立 job，把启动器包的版本设为标签版本后，通过 npm trusted publishing（GitHub Actions OIDC，无需长期 token）发布，并自动生成 provenance。预发布版本（标签含 `-`）发布到 `next` dist-tag。具体步骤见 `docs/releasing.md`。
 - **版本注入**：通过 `-ldflags` 注入版本号、提交哈希和构建时间。
-- **CI**：每个 PR 运行 Go 测试（三个平台）、`go vet`、golangci-lint、前端检查与构建、npm 启动器测试、GoReleaser 配置检查，并用快照构建镜像后实际启动容器做冒烟测试。
+- **CI**：仅文档改动时跳过；其他推送和 PR 按路径变更触发对应 job，涵盖三平台 Go 测试（`go mod tidy -diff`、`go vet`、`go test`）、三平台后台服务生命周期测试（`scripts/service-test.sh`）、三平台安装脚本测试（`scripts/install-test.sh`）、golangci-lint 与 actionlint、前端检查与构建、npm 启动器测试、GoReleaser 配置检查，以及快照镜像构建与容器冒烟测试。
 
 ## 14. 项目结构
 
@@ -764,13 +777,13 @@ build/
   package/Dockerfile
   npm/                     # npm 启动器包
 deployments/               # docker-compose 示例
-scripts/                   # dev.sh（本地演示环境）、service-test.sh（服务生命周期测试）
+scripts/                   # dev.sh（本地演示环境）、service-test.sh（服务生命周期测试）、install-test.sh（安装脚本测试）
 docs/                      # 设计、管理 API、发布流程
 .agents/skills/            # 项目级 skill
 .claude/skills/            # 指向 .agents/skills 的符号链接
 ```
 
-主要依赖：MCP 官方 Go SDK（`github.com/modelcontextprotocol/go-sdk`）、`github.com/coder/websocket`、纯 Go 的 SQLite 驱动（`modernc.org/sqlite`）、`github.com/pelletier/go-toml/v2`、`github.com/fsnotify/fsnotify`、`github.com/spf13/cobra`、`golang.org/x/sys`、`golang.org/x/term`。
+主要依赖：MCP 官方 Go SDK（`github.com/modelcontextprotocol/go-sdk`）、`github.com/coder/websocket`、纯 Go 的 SQLite 驱动（`modernc.org/sqlite`）、`github.com/pelletier/go-toml/v2`、`go.yaml.in/yaml/v4`、`github.com/fsnotify/fsnotify`、`github.com/spf13/cobra`、`golang.org/x/sys`、`golang.org/x/term`。
 
 端到端测试位于 `internal/server/e2e_test.go`：在进程内启动 Server 和多个守护进程，用官方 MCP SDK 客户端走完整链路。
 
@@ -797,23 +810,19 @@ docs/                      # 设计、管理 API、发布流程
 
 ## 16. 路线图
 
-### v1 里程碑
+### 已实现能力
 
-1. **骨架**：项目结构、CLI 框架、构建与 CI
-2. **核心通路**：Server（Lane、凭证、加入、WebSocket 连接）+ 守护进程（握手、心跳、重连）+ SQLite
-3. **MCP 基础**：`list_machines`、`describe_machine`、`read_skill`，简报令牌检查
-4. **执行与文件**：`exec` 与任务管理、`read_file` / `write_file`、`transfer`，三平台适配
-5. **运维体验**：后台服务安装与管理、`doctor`、自动升级、npm 启动器、安装脚本
-6. **Web UI**：全部管理功能，经过品质自查迭代
-7. **发布**：GoReleaser、GHCR 镜像、npm 发布、文档
+- **核心链路**：Server（Lane、凭证、加入、WebSocket 控制通道）+ 守护进程（握手、心跳、重连）+ SQLite 持久化与迁移
+- **MCP 与 skill 体系**：`list_machines`、`describe_machine`、`find_skills`、`read_skill`、`grep_skill`，简报令牌与按会话认知计算的变化报告，结果预算与结束标记，SSE 心跳保活
+- **执行与文件传输**：`exec` 与后台任务管理、`read_file` / `write_file`、支持分段上传与 gzip 压缩的 `transfer`，macOS / Linux / Windows 三平台适配
+- **项目上下文**：`get_project` / `update_project`、位置实时检查（`path.inspect`）、Markdown 上下文与 20 条修订历史/恢复
+- **运维与分发**：后台服务管理、`doctor`、自动升级、npm 启动器、安装脚本、GoReleaser 与 GHCR 镜像、嵌入式 SvelteKit 管理界面
 
-### v1 之后
+### 后续规划
 
 - **官方 Skills 扩展（SEP-2640，`io.modelcontextprotocol/skills`）**：在主流宿主支持后评估接入。截至 2026 年 11 月，Claude Code、Codex、Cursor、VS Code 都还不支持，只有调试器和少数客户端部分支持。另外，该扩展默认 skill 在宿主本机使用和执行，没有表达"必须在某台远程机器上执行"的方式；接入时需要设计好执行位置的表达，避免宿主把脚本拿到 Agent 本机执行。
-
 - PTY 与交互式终端（Unix pty / Windows ConPTY）
 - 远程 MCP connector 所需的 OAuth
-- 跨机器 skill 搜索
 - 把 skill 以 MCP resources / prompts 的形式暴露
 - 端到端加密、点对点直连传输
 - 更细粒度的策略（命令白名单、路径白名单）

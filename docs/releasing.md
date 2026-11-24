@@ -59,13 +59,13 @@ trusted publishing 只能在 npmjs.com 上**已经存在的包**的设置页中�
 ## 发布步骤
 
 1. 确认 `main` 上的 CI 全部通过。
-2. 确认 `docs/design.md`、`README.md` 与本次发布的内容一致。
+2. 确认 `docs/design.md`、`docs/api.md`、`README.md` 与本次发布的内容一致。
 3. 打标签并推送：
 
    ```sh
    git switch main && git pull
-   git tag -a v0.1.0 -m "v0.1.0"
-   git push origin v0.1.0
+   git tag -a v<version> -m "v<version>"
+   git push origin v<version>
    ```
 
 4. 在 Actions 中关注 **Release** 工作流，确认以下几项：

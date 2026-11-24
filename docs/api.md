@@ -38,7 +38,7 @@ Cross-origin, cookie-authenticated, state-changing requests are rejected.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/lanes/{lane}/machines` | Machines with `online`, `connected_at`, `last_seen`, `joined_at`, `policy`, `skill_count`, `skills_hash` and the live `environment` (`os`, `arch`, `hostname`, `user`, `home`, `default_shell`, `shells`, `version`). |
-| `PATCH` | `/lanes/{lane}/machines/{machine}` | Body `{"name"}`; `409` if another machine in the lane has that name. |
+| `PATCH` | `/lanes/{lane}/machines/{machine}` | Body `{"name"}`; `409` if another machine in the lane has that name. `{machine}` is a machine ID. |
 | `DELETE` | `/lanes/{lane}/machines/{machine}` | Removes the machine from the lane and disconnects it. The machine must join again with a join key. |
 | `GET` | `/lanes/{lane}/machines/{machine}/skills` | The skill index (`skills`, `shadowed`, `hash`), whether it is `live` or the last stored snapshot, and `updated_at`. |
 | `GET` | `/lanes/{lane}/machines/{machine}/skills/{skill}?path=` | Without `path`: `SKILL.md`, the skill directory and its file tree (`files`). With `path`: that file (`content`, `encoding` `utf-8` or `base64`, `size`, `truncated`). `503` while the machine is offline. |
@@ -58,10 +58,10 @@ A project names where some work lives (`locations`: a machine and a path each) a
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/lanes/{lane}/projects` | Projects by name: `id`, `name`, `summary` (the first paragraph of the context), `locations` with `machine_name` and `online`, `revision`, `updated_at`, `updated_by`. |
+| `GET` | `/lanes/{lane}/projects` | Projects by name: `id`, `name`, `summary` (the first paragraph of the context), `locations` with `machine_name`, `online` and `removed` (when the machine left the lane), `revision`, `updated_at`, `updated_by` (resolved actor name). |
 | `POST` | `/lanes/{lane}/projects` | Body `{"name", "context"?, "locations"?: [{"machine_id", "path"}]}`. Returns `201` with the project. `409` if the lane has a project of that name (ignoring case). |
-| `GET` | `/lanes/{lane}/projects/{project}` | The project, with each location checked on its machine now: `info` (`exists`, `git`, `branch`, `worktree`, `agent_files`) or a `note` saying why it was not checked. |
-| `PATCH` | `/lanes/{lane}/projects/{project}` | Body with any of `name`, `context`, `locations` (the whole list), and `base_revision`. With `base_revision`, returns `409` and the current `project` if it changed since. |
+| `GET` | `/lanes/{lane}/projects/{project}` | The project (including `updated_by_name`), with each location checked on its machine now: `removed` if the machine left the lane, `info` (`resolved`, `exists`, `dir`, `git`, `branch`, `worktree`, `agent_files`, `error`), or a `note` saying why it was not checked. |
+| `PATCH` | `/lanes/{lane}/projects/{project}` | Body with any of `name`, `context`, `locations` (the whole list), and `base_revision`. Returns `409` if the new name collides with another project (ignoring case), or with the current `project` if `base_revision` is stale. |
 | `DELETE` | `/lanes/{lane}/projects/{project}` | Deletes the project and its history. Files on machines are not touched. |
 | `GET` | `/lanes/{lane}/projects/{project}/revisions` | The last 20 revisions, newest first, each a full snapshot (`revision`, `name`, `context`, `locations`, `updated_at`, `updated_by`, `updated_by_name`). Restore one by sending its fields with `PATCH`. |
 
@@ -71,13 +71,13 @@ A project names where some work lives (`locations`: a machine and a path each) a
 |---|---|---|
 | `GET` | `/lanes/{lane}/audit` | Newest first. Query: `machine`, `action`, `actor`, `before` (an entry ID: pass the last ID of a page to get the next one), `limit` (default 100, max 500). Entries include `actor_name` and `machine_name` when the actor or machine is a key or machine of the lane, including revoked keys and removed machines. |
 
-Each entry has `id`, `time`, `lane_id`, `actor` (an access key ID, a machine ID or `admin`), `action`, `machine_id`, `detail` and `result`. Actions:
+Each entry has `id`, `time`, `lane_id`, `actor` (a key ID, a machine ID or `admin`), `action`, `machine_id`, `detail` and `result`. Actions:
 
 | Action | Recorded when |
 |---|---|
 | `exec` | An agent starts a command (`command`, `cwd`, `skill`, `job_id`, `status`, `exit_code`) |
-| `job.exited` | A command finishes (`exit_code`, `duration_ms`) |
-| `job.write`, `job.kill` | An agent writes to or stops a job |
+| `job.exited` | A command finishes (`job_id`, `command`, `exit_code`, `duration_ms`) |
+| `job.write`, `job.kill` | An agent writes to (`job_id`, `bytes`, `close_stdin`) or stops (`job_id`, `signal`) a job |
 | `file.read`, `file.write` | Inline file operations (`path`, `bytes`) |
 | `transfer` | A transfer between machines (`from_path`, `to_machine`, `to_path`, `bytes`, `files`) |
 | `machine.join`, `machine.leave`, `machine.remove` | Membership changes |

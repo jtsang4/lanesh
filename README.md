@@ -11,11 +11,12 @@ An AI agent can only use the machine it runs on. Your skills are spread across a
 Lanesh gives an agent one MCP endpoint that reaches all of your machines. Through it, the agent can:
 
 - **Discover** which machines are online and which global skills each one has installed
-- **Read** a skill's `SKILL.md`, scripts and references on demand
+- **Read** and search a skill's `SKILL.md`, scripts and references on demand
 - **Run** commands on a specific machine, including long-running background jobs
 - **Move** files and directories between machines
+- **Share projects** with live location checks (Git branch, worktree, `AGENTS.md` / `CLAUDE.md`) and Markdown context
 
-A web UI shows every lane, machine and skill, manages keys, and keeps an audit log of everything agents do.
+A web UI shows every lane, machine, project and skill, manages keys, and keeps an audit log of everything agents do.
 
 ![Skills across the machines of a lane](docs/images/skills-dark.png)
 
@@ -135,6 +136,8 @@ Any MCP client that supports Streamable HTTP works. Pass the access key as `Auth
 
 A **project** says where some work lives (a machine and a path, or several) and what an agent should know about it: free Markdown for what it is, its rules and where it stands. Locations are a guide, not a limit. Reading a project checks each location on its machine (does the path exist, which Git branch, is it a worktree, does it have `AGENTS.md` or `CLAUDE.md`), so nothing that a machine can report goes stale. Manage projects in the web UI, or tell an agent to.
 
+![A project with live location checks, Markdown context and revision history](docs/images/project-dark.png)
+
 Results are compact plain text kept within a token budget. Whatever Lanesh leaves out (long output, large skill trees, the rest of a file) is stated in place with how to get it, and every result ends with `[lanesh] end of result`, so an agent can tell when its client cut a result short.
 
 Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine`. It makes the agent look at a machine's environment and skills before acting on it. When a call has no valid token (the agent forgot it, or the machine's skills changed), nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step. If the skills changed, the briefing starts with what changed since that agent's own last briefing (new, updated and removed skills), so a long-running session knows which skills to re-read while a new session simply sees the current state.
@@ -164,7 +167,7 @@ Commands run as your user, in your login shell's environment, so tools installed
 | `LANESH_TRANSFER_MAX_BYTES` | unlimited | Maximum size of one transfer |
 | `LANESH_TRANSFER_PART_BYTES` | 16 MiB | Largest upload request of a transfer; keep it below the request size limit of any proxy in front of the server (Cloudflare Free/Pro: 100 MB) |
 | `LANESH_TRANSFER_GZIP` | `true` | Compress transfers between daemons that support it |
-| `LANESH_AUDIT_RETENTION_DAYS` | `90` | How long audit records are kept |
+| `LANESH_AUDIT_RETENTION_DAYS` | `90` | How long audit records are kept (`0` keeps them forever) |
 | `LANESH_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## Security
@@ -190,9 +193,8 @@ Requirements: Go (the version in `go.mod` is fetched automatically), Node.js 24+
 ```sh
 make web          # build the UI (embedded into the binary)
 make build        # build ./bin/lanesh
-make test         # Go, web and npm launcher tests
-make lint
-scripts/dev.sh    # local server with demo machines at http://localhost:8080 (admin token lsa_dev_token)
+make check        # lint and tests (Go, web and npm launcher)
+make dev          # local server with demo machines and projects at http://localhost:8080 (admin token lsa_dev_token)
 make dev-web      # UI dev server with API proxy
 ```
 

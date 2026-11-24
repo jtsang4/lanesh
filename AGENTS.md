@@ -1,6 +1,6 @@
 # Agent Guidelines for Lanesh
 
-Lanesh lets an AI agent discover and use global skills and shells across multiple machines through one self-hosted MCP endpoint. It consists of a server, a per-machine daemon, and a management web UI, all shipped as one Go binary.
+Lanesh lets an AI agent discover and use global skills, shells and shared project context across multiple machines through one self-hosted MCP endpoint. It consists of a server, a per-machine daemon, and a management web UI, all shipped as one Go binary.
 
 ## Source of truth
 
@@ -24,9 +24,11 @@ make build        # build ./bin/lanesh
 make test         # go test, svelte-check, npm launcher tests
 make lint         # golangci-lint and web lint
 make check        # lint + test, as CI runs them
+make fmt          # format Go and web sources
 make hooks        # pre-commit hooks for staged files (lefthook)
-scripts/dev.sh    # local server + three demo machines on :8080 (admin token lsa_dev_token)
+make dev          # local server + three demo machines and projects on :8080 (admin token lsa_dev_token)
 scripts/service-test.sh ./bin/lanesh   # background service lifecycle (installs a real per-user service)
+scripts/install-test.sh                # install.sh / install.ps1 tests against a fake release
 ```
 
 - `internal/server/e2e_test.go` runs a real server and daemons in-process and drives them with the official MCP SDK client. Extend it when changing MCP tools or the control protocol.
