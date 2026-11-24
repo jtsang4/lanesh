@@ -2,7 +2,7 @@ import type { MessageKey } from './en';
 
 export const zhCN: Record<MessageKey, string> = {
 	'app.name': 'Lanesh',
-	'app.tagline': '跨机器共享 skill 与 shell',
+	'app.tagline': '为 AI Agent 连接你的所有机器，共享 skill、shell、文件与项目',
 
 	'common.cancel': '取消',
 	'common.save': '保存',

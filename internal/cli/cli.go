@@ -37,10 +37,10 @@ func Execute() int {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "lanesh",
-		Short: "Share skills and shells across your machines through one MCP endpoint",
+		Short: "Connect all your machines for AI agents — with shared skills, shells, files, and projects",
 		Long: `Lanesh connects your machines to a self-hosted server so that AI agents can
-discover the skills installed on each machine, run commands and move files
-between them through one MCP endpoint.`,
+discover the skills installed on each machine, run commands, move files, and
+share projects across them through one MCP endpoint.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(*cobra.Command, []string) {

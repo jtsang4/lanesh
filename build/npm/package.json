@@ -1,7 +1,7 @@
 {
   "name": "lanesh",
   "version": "0.0.0-development",
-  "description": "Share skills and shells across your machines through one MCP endpoint.",
+  "description": "Connect all your machines for AI agents — with shared skills, shells, files, and projects.",
   "keywords": [
     "mcp",
     "model-context-protocol",

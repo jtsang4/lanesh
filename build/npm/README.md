@@ -1,6 +1,6 @@
 # lanesh
 
-Share skills and shells across your machines through one MCP endpoint.
+Connect all your machines for AI agents — with shared skills, shells, files, and projects.
 
 This package installs the `lanesh` command. On first run it downloads the
 native binary for your platform from

@@ -1,6 +1,6 @@
 # Lanesh
 
-**Share skills and shells across your machines through one MCP endpoint.**
+**Connect all your machines for AI agents — with shared skills, shells, files, and projects.**
 
 [![CI](https://github.com/jtsang4/lanesh/actions/workflows/ci.yml/badge.svg)](https://github.com/jtsang4/lanesh/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jtsang4/lanesh?sort=semver)](https://github.com/jtsang4/lanesh/releases)

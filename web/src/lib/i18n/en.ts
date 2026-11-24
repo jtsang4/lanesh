@@ -3,7 +3,8 @@
 
 export const en = {
 	'app.name': 'Lanesh',
-	'app.tagline': 'Skills and shells across your machines',
+	'app.tagline':
+		'Connect all your machines for AI agents — with shared skills, shells, files, and projects.',
 
 	'common.cancel': 'Cancel',
 	'common.save': 'Save',
