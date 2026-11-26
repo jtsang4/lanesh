@@ -27,7 +27,7 @@ python3 -m http.server 18300 --directory "$(native "$WORK/rel")" >/dev/null 2>&1
 HTTP_PID=$!
 "$WORK/server$ext" server --listen 127.0.0.1:18301 --data-dir "$(native "$WORK/data")" --admin-token lsa_install >/dev/null 2>&1 &
 SERVER_PID=$!
-trap 'kill $HTTP_PID $SERVER_PID 2>/dev/null || true; rm -rf "$WORK"' EXIT
+trap 'kill $HTTP_PID $SERVER_PID 2>/dev/null || true; wait $HTTP_PID $SERVER_PID 2>/dev/null || true; rm -rf "$WORK" 2>/dev/null || true' EXIT
 for _ in $(seq 1 50); do curl -fs http://127.0.0.1:18301/healthz >/dev/null && curl -fs http://127.0.0.1:18300/ >/dev/null && break; sleep 0.2; done
 
 export LANESH_VERSION=$VERSION LANESH_DOWNLOAD_BASE=http://127.0.0.1:18300
