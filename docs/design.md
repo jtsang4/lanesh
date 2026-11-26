@@ -634,7 +634,10 @@ Server 本身只监听 HTTP，TLS 由反向代理（例如 Coolify / Traefik）�
 | 安装脚本（Windows） | `irm https://<server>/install.ps1 \| iex` |
 | 手动 | 从 GitHub Releases 下载对应平台的压缩包或独立二进制 |
 
-所有途径最终都把二进制放到 `~/.lanesh/bin/`。
+所有途径最终都把受管二进制放到 `~/.lanesh/bin/`。为了让 `lanesh` 可直接全局执行，安装脚本和 `lanesh join`（以及 `lanesh update`）在默认 `LANESH_HOME` 且未设置 `LANESH_NO_MODIFY_PATH=1` 时会自动配置 `PATH`：
+
+- **macOS / Linux**：若 `~/.lanesh/bin` 尚不在 `PATH` 中，且当前 `PATH` 中没有指向受管二进制或全局 npm 启动器的 `lanesh`（忽略 `npx` / `dlx` / `bunx` 等临时 `node_modules/.bin` 入口），按 `~/.local/bin` → `~/bin` → `/usr/local/bin` 顺序寻找第一个已在当前 `PATH` 中、当前用户无需 `sudo` 可写且非 Homebrew 的目录创建指向 `~/.lanesh/bin/lanesh` 的软链接（不覆盖非 Lanesh 文件）；若没有匹配目录，则幂等地向当前 shell 配置文件（`.zshrc` / `.bashrc` / `.bash_profile` / `config.fish` / `.profile`）追加 `~/.lanesh/bin` 并提示重载或新开终端。
+- **Windows**：将 `%USERPROFILE%\.lanesh\bin` 写入当前用户的 `Path` 环境变量（保留原有类型并广播 `WM_SETTINGCHANGE`），不依赖需要管理员权限的符号链接。
 
 ### 11.2 npm 包
 

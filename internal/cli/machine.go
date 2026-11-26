@@ -207,14 +207,20 @@ func newJoinCmd() *cobra.Command {
 			}
 			if noService {
 				fmt.Fprintln(w, "\nSkipped the background service. Run `lanesh daemon` to connect.")
+				if _, err := os.Stat(p.Binary()); err == nil {
+					exposeCLI(w, p)
+				}
 				return nil
 			}
 			fmt.Fprintln(w)
 			if err := installService(cmd, p); err != nil {
 				fmt.Fprintf(w, "Could not install the background service: %v\nRun `lanesh daemon` in a terminal or under your own supervisor instead.\n", err)
-				return nil
+			} else {
+				waitConnected(cmd, p, res.Lane.LaneID)
 			}
-			waitConnected(cmd, p, res.Lane.LaneID)
+			if _, err := os.Stat(p.Binary()); err == nil {
+				exposeCLI(w, p)
+			}
 			return nil
 		},
 	}
@@ -511,6 +517,7 @@ func newUpdateCmd() *cobra.Command {
 				}
 			}
 			fmt.Fprintf(w, "Installed %s.\n", p.Binary())
+			exposeCLI(w, p)
 			return nil
 		},
 	}

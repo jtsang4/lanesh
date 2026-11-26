@@ -64,7 +64,7 @@ volumes:
 
 在浏览器中打开服务端，使用管理员令牌登录，创建一个 Lane，然后分别创建 **join key**（用于机器加入）和 **access key**（用于 Agent 接入）。Web 管理界面会给出接下来两步可直接复制执行的命令。
 
-也可以改用终端操作：
+也可以改用终端操作（先[安装 CLI](#安装-cli)）：
 
 ```sh
 lanesh admin login https://lanesh.example.com
@@ -89,7 +89,7 @@ curl -fsSL https://lanesh.example.com/install.sh | sh -s -- join https://lanesh.
 
 或者通过 Node.js 运行：`npx lanesh join https://lanesh.example.com/lanes/<lane-id> --key <join-key>`。
 
-`lanesh join` 会把二进制安装到 `~/.lanesh/bin`，注册当前机器，并启动用户级后台服务：macOS 上是 launchd agent，Linux 上是 systemd 用户服务，Windows 上是计划任务。守护进程会自动与服务端保持同一版本。加上 `--no-exec` 可只共享 skill，不开放命令执行和文件访问。
+安装脚本和 `lanesh join` 会把二进制安装到 `~/.lanesh/bin`、配置好全局 `PATH`、注册当前机器，并启动用户级后台服务：macOS 上是 launchd agent，Linux 上是 systemd 用户服务，Windows 上是计划任务。守护进程会自动与服务端保持同一版本。加上 `--no-exec` 可只共享 skill，不开放命令执行和文件访问。
 
 ### 4. 接入 Agent
 
@@ -143,6 +143,27 @@ Cursor：添加到全局的 `~/.cursor/mcp.json`。Web 管理界面会为上述�
 工具返回的结果都是精简纯文本，并控制在 token 预算以内。凡是 Lanesh 省略的内容（过长输出、庞大的 skill 文件树、文件剩余部分）都会在原处标明并给出继续读取的方式；每条结果都以 `[lanesh] end of result` 结尾，方便 Agent 判断输出是否被客户端截断。
 
 每个操作具体机器的工具都需要携带该机器的简报令牌（由 `describe_machine` 返回的短字符串，形如 `build-box:k3f9q2ab`），用于确保 Agent 在操作之前先了解机器的环境与 skill。如果调用时缺少有效令牌（例如 Agent 忘记携带，或机器上的 skill 发生了变化），操作不会执行，而是直接返回该机器的最新简报与当前令牌，Agent 一次重试即可同步并继续。如果 skill 有变动，简报开头会列出自该 Agent 上一次获取简报以来的变更（新增、更新或移除的 skill），因此长会话能清楚知道需要重读哪些 skill，而新会话只需直接看到最新状态。
+
+## 安装 CLI
+
+通过上面的安装脚本加入机器时，`lanesh` 命令已经一并装好。如果你只想单独安装命令行工具（例如在常用电脑上管理 Lane 和凭证）：
+
+- **从你的服务端安装**（推荐，自动匹配服务端版本）：
+
+  ```sh
+  # macOS / Linux
+  curl -fsSL https://lanesh.example.com/install.sh | sh
+  ```
+
+  ```powershell
+  # Windows (PowerShell)
+  irm https://lanesh.example.com/install.ps1 | iex
+  ```
+
+- **通过 npm 安装**（需要 Node.js 22+）：`npm install -g lanesh`
+- **手动下载**：从 [Releases](https://github.com/jtsang4/lanesh/releases) 获取对应平台的二进制或压缩包
+
+所有方式都会把受管二进制存放在 `~/.lanesh/bin`（可通过 `LANESH_HOME` 覆盖）。在 macOS 和 Linux 上，安装脚本和 `lanesh join` 会优先在当前 `PATH` 中第一个可写的非 Homebrew 目录（`~/.local/bin`、`~/bin` 或 `/usr/local/bin`）创建软链接，没有可用目录时则自动把 `~/.lanesh/bin` 追加到当前 shell 配置文件；在 Windows 上会把 `%USERPROFILE%\.lanesh\bin` 加入用户 `PATH`。设置 `LANESH_NO_MODIFY_PATH=1` 可跳过自动 `PATH` 配置。
 
 ## 管理机器
 

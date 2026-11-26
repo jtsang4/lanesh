@@ -54,6 +54,13 @@ func newDoctorCmd() *cobra.Command {
 			if !update.SameFile(p.Binary()) {
 				c.warn("this command runs from %s, not the managed binary", absPath(os.Args[0]))
 			}
+			if found := findLaneshInPath(os.Getenv("PATH")); found == "" {
+				c.warn("lanesh is not on PATH (add %s to PATH)", p.BinDir())
+			} else if isSameExecutable(found, p.Binary()) || isPersistentNPMLauncher(found) {
+				c.ok("lanesh on PATH (%s)", found)
+			} else {
+				c.warn("lanesh on PATH is %s, not %s", found, p.Binary())
+			}
 
 			fmt.Fprintln(c.w, "Service")
 			m, err := serviceManager()

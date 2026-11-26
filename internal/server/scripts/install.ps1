@@ -4,12 +4,14 @@
 #   & ([scriptblock]::Create((irm {{.ServerURL}}/install.ps1))) join <lane-url> --key <join-key>
 #
 # Arguments are passed to lanesh once it is installed.
+# Set LANESH_NO_MODIFY_PATH=1 to skip adding the bin directory to your user PATH.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $Version = if ($env:LANESH_VERSION) { $env:LANESH_VERSION } else { '{{.Version}}' }
 $Base = if ($env:LANESH_DOWNLOAD_BASE) { $env:LANESH_DOWNLOAD_BASE } else { 'https://github.com/jtsang4/lanesh/releases/download' }
-$LaneshDir = if ($env:LANESH_HOME) { $env:LANESH_HOME } else { Join-Path $env:USERPROFILE '.lanesh' }
+$DefaultHome = Join-Path $env:USERPROFILE '.lanesh'
+$LaneshDir = if ($env:LANESH_HOME) { $env:LANESH_HOME } else { $DefaultHome }
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
   'AMD64' { 'amd64' }
@@ -45,11 +47,22 @@ try {
   Move-Item -Path (Join-Path $tmp 'lanesh.exe') -Destination $exe
   Write-Host "Installed $exe"
 
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if (-not ($userPath -split ';' | Where-Object { $_ -eq $binDir })) {
-    [Environment]::SetEnvironmentVariable('Path', ($binDir + ';' + $userPath).TrimEnd(';'), 'User')
-    $env:Path = "$binDir;$env:Path"
-    Write-Host "Added $binDir to your user PATH (open a new terminal to pick it up)."
+  $customHome = $LaneshDir.TrimEnd('\', '/') -ne $DefaultHome.TrimEnd('\', '/')
+  $noModify = $env:LANESH_NO_MODIFY_PATH -and $env:LANESH_NO_MODIFY_PATH -notin @('0', 'false', 'FALSE')
+  if (-not $customHome -and -not $noModify) {
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = if ($userPath) { $userPath -split ';' } else { @() }
+    $hasDir = $entries | Where-Object { $_.Trim().TrimEnd('\') -eq $binDir.TrimEnd('\') }
+    if (-not $hasDir) {
+      $newUserPath = if ($userPath) { "$binDir;$userPath" } else { $binDir }
+      [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+      $env:Path = "$binDir;$env:Path"
+      Write-Host "Added $binDir to your user PATH (open a new terminal to pick it up)."
+    } elseif (-not (($env:Path -split ';') | Where-Object { $_.Trim().TrimEnd('\') -eq $binDir.TrimEnd('\') })) {
+      $env:Path = "$binDir;$env:Path"
+    }
+  } elseif ($args.Count -eq 0 -and -not (($env:Path -split ';') | Where-Object { $_.Trim().TrimEnd('\') -eq $binDir.TrimEnd('\') })) {
+    Write-Host "Add $binDir to your PATH to use lanesh."
   }
 } finally {
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp

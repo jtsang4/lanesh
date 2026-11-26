@@ -64,7 +64,7 @@ Prefer a single binary? Download it from [Releases](https://github.com/jtsang4/l
 
 Open the server in a browser, sign in with the admin token, create a lane, then create a **join key** (for machines) and an **access key** (for agents). The web UI shows ready-to-paste commands for the next two steps.
 
-From a terminal instead:
+From a terminal instead (after [installing the CLI](#installing-the-cli)):
 
 ```sh
 lanesh admin login https://lanesh.example.com
@@ -89,7 +89,7 @@ curl -fsSL https://lanesh.example.com/install.sh | sh -s -- join https://lanesh.
 
 Or with Node.js: `npx lanesh join https://lanesh.example.com/lanes/<lane-id> --key <join-key>`.
 
-`lanesh join` installs the binary to `~/.lanesh/bin`, registers the machine and starts a per-user background service: a launchd agent on macOS, a systemd user unit on Linux, or a scheduled task on Windows. The daemon keeps itself on the same version as the server. Add `--no-exec` to share skills without allowing commands or file access.
+The install script and `lanesh join` install the binary to `~/.lanesh/bin`, make `lanesh` available on your `PATH`, register the machine and start a per-user background service: a launchd agent on macOS, a systemd user unit on Linux, or a scheduled task on Windows. The daemon keeps itself on the same version as the server. Add `--no-exec` to share skills without allowing commands or file access.
 
 ### 4. Connect an agent
 
@@ -143,6 +143,27 @@ A **project** says where some work lives (a machine and a path, or several) and 
 Results are compact plain text kept within a token budget. Whatever Lanesh leaves out (long output, large skill trees, the rest of a file) is stated in place with how to get it, and every result ends with `[lanesh] end of result`, so an agent can tell when its client cut a result short.
 
 Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine`. It makes the agent look at a machine's environment and skills before acting on it. When a call has no valid token (the agent forgot it, or the machine's skills changed), nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step. If the skills changed, the briefing starts with what changed since that agent's own last briefing (new, updated and removed skills), so a long-running session knows which skills to re-read while a new session simply sees the current state.
+
+## Installing the CLI
+
+Joining a machine with the install script above already installs the `lanesh` command. If you only want the CLI (for example, to manage lanes and keys from your laptop):
+
+- **From your server** (recommended — matches the server version):
+
+  ```sh
+  # macOS / Linux
+  curl -fsSL https://lanesh.example.com/install.sh | sh
+  ```
+
+  ```powershell
+  # Windows (PowerShell)
+  irm https://lanesh.example.com/install.ps1 | iex
+  ```
+
+- **With npm** (requires Node.js 22+): `npm install -g lanesh`
+- **Manual download**: grab a binary or archive from [Releases](https://github.com/jtsang4/lanesh/releases)
+
+All methods store the managed binary in `~/.lanesh/bin` (override with `LANESH_HOME`). On macOS and Linux, the installer and `lanesh join` symlink `lanesh` into the first writable non-Homebrew directory already on your `PATH` (`~/.local/bin`, `~/bin`, or `/usr/local/bin`), or append `~/.lanesh/bin` to your shell profile if none is available. On Windows, `%USERPROFILE%\.lanesh\bin` is added to your user `PATH`. Set `LANESH_NO_MODIFY_PATH=1` to skip automatic `PATH` setup.
 
 ## Managing a machine
 
