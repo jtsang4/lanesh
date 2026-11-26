@@ -6,6 +6,8 @@
 [![Release](https://img.shields.io/github/v/release/jtsang4/lanesh?sort=semver)](https://github.com/jtsang4/lanesh/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**English** | [简体中文](README.zh-CN.md)
+
 An AI agent can only use the machine it runs on. Your skills are spread across a laptop, a dev box and a GPU server, each with its own tools, credentials and network access. Copying skills around drifts out of sync, and SSH gives an agent a shell but tells it nothing about what each machine can do.
 
 Lanesh gives an agent one MCP endpoint that reaches all of your machines. Through it, the agent can:
