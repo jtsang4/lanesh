@@ -184,10 +184,11 @@ func (t *Tools) register(s *mcp.Server) {
 	add(s, tool("exec", "Run a shell command on a machine. Returns when done or after timeout_ms (default 30000); "+
 		"then it keeps running as a job (job_read, job_kill). With skill, cwd is relative to the skill directory. "+
 		"stdin is closed unless background.", &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)}), t.exec)
-	add(s, tool("job_read", "Read a job's output from offset; wait_ms waits for new output.", ro), t.jobRead)
+	add(s, tool("job_read", "Read a job's output (stdout, stderr, or both). Supports wait_ms (max 60000), "+
+		"wait_until (output, idle, or exit), and match (Go regex).", ro), t.jobRead)
 	add(s, tool("job_write", "Write to a background job's stdin.", nil), t.jobWrite)
 	add(s, tool("job_kill", "Stop a job and its children.", rw), t.jobKill)
-	add(s, tool("job_list", "Recent jobs on a machine started with your key (all: every key).", ro), t.jobList)
+	add(s, tool("job_list", "Running jobs on a machine started with your key (include_finished for recent completed jobs; all for every key).", ro), t.jobList)
 	add(s, tool("read_file", "Read a file on a machine (start_line/end_line or byte offset/limit; paths relative to home). "+
 		"Supported images (PNG/JPEG/WebP/GIF) are returned natively; other binaries as base64.", ro), t.readFile)
 	add(s, tool("write_file", "Write a file up to 1 MiB atomically; overwrite to replace.", rw), t.writeFile)

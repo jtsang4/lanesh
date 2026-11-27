@@ -205,3 +205,87 @@ func TestRingWrapsAcrossWrites(t *testing.T) {
 		t.Fatalf("ReadAt = %q %d", data, start)
 	}
 }
+
+func TestJobReadBothIdleExitMatch(t *testing.T) {
+	m := NewManager(Options{})
+
+	// 1. stream="both" captures stdout and stderr in one call; wait_until="exit" waits to completion.
+	cmd := "echo out1; echo err1 >&2; sleep 0.2; echo out2; echo err2 >&2"
+	if runtime.GOOS == "windows" {
+		cmd = "Write-Output out1; [Console]::Error.WriteLine('err1'); Start-Sleep -Milliseconds 200; Write-Output out2; [Console]::Error.WriteLine('err2')"
+	}
+	st, err := m.Start(context.Background(), protocol.ExecParams{Command: cmd, Background: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.Read(context.Background(), protocol.JobReadParams{
+		JobID: st.JobID, Stream: "both", WaitMS: 10_000, WaitUntil: "exit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.EOF || r.Status != protocol.JobExited || !strings.Contains(r.Data, "out1") || !strings.Contains(r.Data, "out2") ||
+		!strings.Contains(r.StderrData, "err1") || !strings.Contains(r.StderrData, "err2") {
+		t.Fatalf("both+exit = %+v", r)
+	}
+
+	// 2. match wakes as soon as readiness line appears without waiting for job exit.
+	matchCmd := "echo booting; sleep 0.1; echo READY_ON_8080; sleep 30"
+	if runtime.GOOS == "windows" {
+		matchCmd = "Write-Output booting; Start-Sleep -Milliseconds 100; Write-Output READY_ON_8080; Start-Sleep -Seconds 30"
+	}
+	st2, err := m.Start(context.Background(), protocol.ExecParams{Command: matchCmd, Background: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = m.Kill(protocol.JobKillParams{JobID: st2.JobID}) })
+	start := time.Now()
+	r2, err := m.Read(context.Background(), protocol.JobReadParams{
+		JobID: st2.JobID, Stream: "both", WaitMS: 15_000, Match: `READY_ON_\d+`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r2.Matched || !strings.Contains(r2.Data, "READY_ON_8080") || r2.EOF || time.Since(start) > 10*time.Second {
+		t.Fatalf("match = %+v elapsed=%v", r2, time.Since(start))
+	}
+
+	// 3. wait_until="idle" waits for a burst to finish and go quiet.
+	idleCmd := "echo part1; sleep 0.1; echo part2; sleep 30"
+	if runtime.GOOS == "windows" {
+		idleCmd = "Write-Output part1; Start-Sleep -Milliseconds 100; Write-Output part2; Start-Sleep -Seconds 30"
+	}
+	st3, err := m.Start(context.Background(), protocol.ExecParams{Command: idleCmd, Background: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = m.Kill(protocol.JobKillParams{JobID: st3.JobID}) })
+	r3, err := m.Read(context.Background(), protocol.JobReadParams{
+		JobID: st3.JobID, Stream: "stdout", WaitMS: 10_000, WaitUntil: "idle", IdleMS: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r3.Data, "part1") || !strings.Contains(r3.Data, "part2") || r3.EOF {
+		t.Fatalf("idle = %+v", r3)
+	}
+}
+
+func TestSplitStreamBudgetAndCJKTokenCap(t *testing.T) {
+	ob, eb := splitStreamBudget(10_000, 0, 6_500)
+	if ob != 6_500 || eb != 0 {
+		t.Fatalf("all stdout: %d %d", ob, eb)
+	}
+	ob, eb = splitStreamBudget(5_000, 5_000, 6_500)
+	if ob != 3_250 || eb != 3_250 {
+		t.Fatalf("balanced: %d %d", ob, eb)
+	}
+	// Dense CJK text under 6,500 bytes (2,100 CJK chars = 6,300 B = 2,100 tokens)
+	// gets trimmed to stay within the token budget.
+	cjk := newRing(1 << 20)
+	_, _ = cjk.Write([]byte(strings.Repeat("汉", 2100)))
+	out, _, trunc := inline(cjk, "stdout", DefaultMaxOutput)
+	if !trunc || !strings.Contains(out, "omitted here") {
+		t.Fatalf("expected CJK token cap truncation, got len=%d trunc=%v", len(out), trunc)
+	}
+}

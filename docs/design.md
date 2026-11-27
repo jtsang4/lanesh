@@ -199,8 +199,8 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 - `exec` 在 `timeout_ms`（等待时长，默认 30 秒，可调）内结束时，直接返回退出码和输出；超时仍未结束时，返回 `status: running` 和 `job_id`，任务转入后台继续运行。
 - `background: true` 时立即返回 `job_id`。
 - 输出写入每个任务独立的环形缓冲（stdout 和 stderr 分开，默认上限各 16MB），超出部分丢弃最早的内容并标记。任务结束后保留一段时间（默认 1 小时）供读取。
-- 返回给 Agent 的输出有内联上限（每个流默认 10,000 字节，保留头部和尾部），省略处写明省略了多少字节、用哪个 `offset` 通过 `job_read` 读取。`job_read` 每次默认读 20KB。
-- 任务记录发起它的 access key（`owner`）。`job_list` 默认只列出当前 access key 发起的任务。
+- 返回给 Agent 的输出有内联上限（stdout 与 stderr 合并默认 6,500 字节且受宽字符 token 预算约束，保留头部和尾部，避开主流客户端约 10 KB 落盘线导致的双重截断），省略处写明省略了多少字节、用哪个 `offset` 通过 `job_read` 读取。`job_read` 每次默认读 20KB，支持 `stream: "both"` 同次读取双流、`wait_until: "output" | "idle" | "exit"`（含 300ms 聚包窗口）及 `match` 正则唤醒，`wait_ms` 上限 60 秒以安全低于反向代理超时。
+- 任务记录发起它的 access key（`owner`）。`job_list` 默认只列出当前 access key 正在运行的任务（按需传 `include_finished` / `limit` / `all` 查看历史或其他 key 的任务），命令摘要折叠为单行。
 - 任务按 Lane 隔离：一个 Lane 发起的任务，只能在同一个 Lane 里读取、写入和终止。
 - 前台执行（未设置 `background`）在写完可选的 `stdin` 后立即关闭标准输入，避免命令等待输入而挂起；`background: true` 时保持标准输入打开，供 `job_write` 使用。
 - 守护进程重启时，所有正在运行的任务都会被终止。
@@ -419,11 +419,11 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - 返回状态行（退出码和耗时，或者"仍在运行"和 `job_id`）、工作目录和 shell，以及 stdout、stderr 两段输出。输出过长时保留头尾，省略处写明如何用 `job_read` 读取。
 - 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`）和终止方法。
 
-**`job_read(machine, job_id, stream?, offset?, limit?, wait_ms?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?)`**
+**`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, idle_ms?, match?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
 
 - 分别用于分段读取输出、写入 stdin、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`。
-- `job_read` 写明本次读取的字节范围，以及接下来怎么做：还有更多时给出下一次的 `offset`；任务已结束并读完时说明输出结束；任务仍在运行时提示用 `wait_ms` 等待新输出。被环形缓冲丢弃的范围也会写明。
-- `job_list` 默认只列出当前 access key 发起的任务，`all: true` 列出该 Lane 在这台机器上的全部任务。
+- `job_read` 支持 `stream: "stdout" | "stderr" | "both"`、`wait_until: "output" | "idle" | "exit"`（`output` 模式带 300ms 聚包，避免逐字唤醒；`wait_ms` 上限 60 秒）与 `match` 正则匹配唤醒；写明本次读取的字节范围与继续读取的 `offset` / `stderr_offset`。被环形缓冲丢弃的范围也会写明。
+- `job_list` 默认只列出当前 access key 正在运行的任务并将多行命令折叠为单行；`include_finished: true` 包含最近保留的已结束任务（默认上限 20，最高 100），`all: true` 列出该 Lane 在这台机器上的全部任务。
 
 **`read_file(machine, briefing, path, start_line?, end_line?, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**、**`edit_file(machine, briefing, path, old_text?, new_text?, edits?)`**、**`list_dir(machine, briefing, path?, max_depth?, include_hidden?)`**、**`grep_files(machine, briefing, pattern, path?, regex?, case_sensitive?, glob?, max_matches?)`**
 

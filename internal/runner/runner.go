@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jtsang4/lanesh/internal/auth"
 	"github.com/jtsang4/lanesh/internal/protocol"
@@ -21,13 +23,17 @@ import (
 const (
 	DefaultWait      = 30 * time.Second
 	MaxWait          = 10 * time.Minute
-	DefaultMaxOutput = 10_000
+	DefaultMaxOutput = 6_500
 	DefaultBuffer    = 16 << 20
 	DefaultRetention = time.Hour
 	DefaultReadLimit = 20 << 10
 	MaxReadLimit     = 1 << 20
 	MaxReadWait      = time.Minute
+	DefaultCoalesce  = 300 * time.Millisecond
+	DefaultIdleWait  = 1500 * time.Millisecond
+	MaxIdleWait      = 15 * time.Second
 	MaxRunning       = 64
+	maxMatchScan     = 256 << 10
 )
 
 // Errors returned by the manager.
@@ -236,21 +242,29 @@ func (m *Manager) wait(j *job, cmd *exec.Cmd) {
 }
 
 // inline renders a stream for an exec result, keeping head and tail when the
-// output exceeds maxOut bytes.
+// output exceeds maxOut bytes (or an equivalent wide-character token budget).
 func inline(r *ring, stream string, maxOut int) (text string, total int64, truncated bool) {
 	data, total, dropped := r.Snapshot()
-	if len(data) <= maxOut && dropped == 0 {
+	if maxOut <= 0 {
+		return "", total, len(data) > 0 || dropped > 0
+	}
+	limit := maxOut
+	// Cap wide-character (e.g. CJK) output by estimated tokens too: ~30% of
+	// byte budget corresponds to ~1,950 tokens for the 6,500-byte default,
+	// avoiding client-side spill-to-disk on dense CJK output while leaving
+	// ASCII output governed by the byte budget.
+	if maxTokens := max(maxOut*3/10, 100); len(data) <= limit {
+		if tok := estimateTokensBytes(data); tok > maxTokens {
+			limit = max(len(data)*maxTokens/tok, 64)
+		}
+	}
+	if len(data) <= limit && dropped == 0 {
 		return toText(data), total, false
 	}
-	if len(data) <= maxOut {
+	if len(data) <= limit {
 		return fmt.Sprintf("[lanesh] %d earlier bytes were dropped from the job's buffer\n", dropped) + toText(data), total, true
 	}
-	half := maxOut / 2
-	head := cutRuneBoundary(data[:half])
-	tail := data[len(data)-half:]
-	for len(tail) > 0 && tail[0]&0xC0 == 0x80 {
-		tail = tail[1:]
-	}
+	head, tail := trimHeadTail(data, limit)
 	omitted := total - dropped - int64(len(head)) - int64(len(tail))
 	hint := ""
 	if stream != "stdout" {
@@ -266,14 +280,61 @@ func inline(r *ring, stream string, maxOut int) (text string, total int64, trunc
 
 func (m *Manager) status(j *job, maxOut int) protocol.JobStatus {
 	status, code, dur := j.state()
-	out, outTotal, outTrunc := inline(j.stdout, "stdout", maxOut)
-	errText, errTotal, errTrunc := inline(j.stderr, "stderr", maxOut)
+	outBudget, errBudget := splitStreamBudget(j.stdout.Len(), j.stderr.Len(), maxOut)
+	out, outTotal, outTrunc := inline(j.stdout, "stdout", outBudget)
+	errText, errTotal, errTrunc := inline(j.stderr, "stderr", errBudget)
 	return protocol.JobStatus{
 		JobID: j.id, Status: status, ExitCode: code, Command: j.command, Cwd: j.cwd, Shell: j.shell,
 		StartedAt: j.started.Unix(), DurationMS: dur.Milliseconds(),
 		Stdout: out, Stderr: errText, StdoutBytes: outTotal, StderrBytes: errTotal,
 		OutputTruncated: outTrunc || errTrunc, Owner: j.owner,
 	}
+}
+
+// splitStreamBudget divides a combined byte budget across stdout and stderr,
+// letting a busy stream borrow any unused share from a quiet one.
+func splitStreamBudget(outAvail, errAvail, total int) (int, int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if outAvail+errAvail <= total {
+		return total, total
+	}
+	half := total / 2
+	if outAvail < half {
+		return outAvail, total - outAvail
+	}
+	if errAvail < half {
+		return total - errAvail, errAvail
+	}
+	return half, total - half
+}
+
+// trimToTokens caps text bytes when wide characters (e.g. CJK) push estimated
+// token count far above a safe inline threshold, preserving head and tail.
+func trimHeadTail(data []byte, limit int) (head, tail []byte) {
+	half := limit / 2
+	head = cutRuneBoundary(data[:half])
+	tail = data[len(data)-half:]
+	for len(tail) > 0 && tail[0]&0xC0 == 0x80 {
+		tail = tail[1:]
+	}
+	return head, tail
+}
+
+func estimateTokensBytes(b []byte) int {
+	ascii, wide := 0, 0
+	for len(b) > 0 {
+		if b[0] < utf8.RuneSelf {
+			ascii++
+			b = b[1:]
+		} else {
+			_, n := utf8.DecodeRune(b)
+			wide++
+			b = b[n:]
+		}
+	}
+	return ascii/4 + wide
 }
 
 func (m *Manager) get(id string) (*job, error) {
@@ -286,68 +347,237 @@ func (m *Manager) get(id string) (*job, error) {
 	return j, nil
 }
 
-// Read returns a range of a job's output stream ("stdout" or "stderr"). With
-// p.WaitMS it first waits until there is output beyond p.Offset or the job
-// has finished.
+// Read returns a range of a job's output stream ("stdout", "stderr", or
+// "both"). WaitMS / WaitUntil / Match bound waiting up to MaxReadWait (60s).
 func (m *Manager) Read(ctx context.Context, p protocol.JobReadParams) (protocol.JobReadResult, error) {
 	j, err := m.get(p.JobID)
 	if err != nil {
 		return protocol.JobReadResult{}, err
 	}
-	if p.WaitMS > 0 {
-		j.waitForOutput(ctx, p.Stream, p.Offset, min(time.Duration(p.WaitMS)*time.Millisecond, MaxReadWait))
-	}
 	stream := p.Stream
 	if stream == "" {
 		stream = "stdout"
 	}
-	var r *ring
 	switch stream {
-	case "stdout":
-		r = j.stdout
-	case "stderr":
-		r = j.stderr
+	case "stdout", "stderr", "both":
 	default:
-		return protocol.JobReadResult{}, fmt.Errorf("unknown stream %q", stream)
+		return protocol.JobReadResult{}, fmt.Errorf("unknown stream %q (want stdout, stderr, or both)", stream)
 	}
+	waitUntil := p.WaitUntil
+	if waitUntil == "" {
+		waitUntil = "output"
+	}
+	switch waitUntil {
+	case "output", "idle", "exit":
+	default:
+		return protocol.JobReadResult{}, fmt.Errorf("unknown wait_until %q (want output, idle, or exit)", waitUntil)
+	}
+	var matchRe *regexp.Regexp
+	if p.Match != "" {
+		if matchRe, err = regexp.Compile(p.Match); err != nil {
+			return protocol.JobReadResult{}, fmt.Errorf("invalid match pattern: %w", err)
+		}
+	}
+
 	limit := p.Limit
 	if limit <= 0 {
 		limit = DefaultReadLimit
 	}
 	limit = min(limit, MaxReadLimit)
-	data, start, total, dropped := r.ReadAt(p.Offset, limit)
-	if start+int64(len(data)) < total {
-		data = cutRuneBoundary(data)
+
+	outOff := max(p.Offset, 0)
+	errOff := max(p.StderrOffset, 0)
+	if stream == "stderr" {
+		errOff = outOff
 	}
+
+	wait := time.Duration(p.WaitMS) * time.Millisecond
+	if wait <= 0 && (p.WaitUntil != "" || p.Match != "") {
+		wait = DefaultWait
+	}
+	wait = min(wait, MaxReadWait)
+
+	idleWait := DefaultIdleWait
+	if p.IdleMS > 0 {
+		idleWait = min(time.Duration(p.IdleMS)*time.Millisecond, MaxIdleWait)
+	}
+
+	matched := false
+	if wait > 0 {
+		matched = j.waitForRead(ctx, stream, outOff, errOff, wait, waitUntil, idleWait, limit, matchRe)
+	} else if matchRe != nil {
+		matched = j.matchesNew(stream, outOff, errOff, matchRe)
+	}
+
 	status, code, _ := j.state()
+	if stream == "both" {
+		_, _, outTotal, outDropped := j.stdout.ReadAt(outOff, 0)
+		_, _, errTotal, errDropped := j.stderr.ReadAt(errOff, 0)
+		outAvail := int(max(int64(0), outTotal-max(outOff, outDropped)))
+		errAvail := int(max(int64(0), errTotal-max(errOff, errDropped)))
+		outLim, errLim := splitStreamBudget(outAvail, errAvail, limit)
+		outData, outStart, outTotal, outDropped := readLimited(j.stdout, outOff, outLim)
+		errData, errStart, errTotal, errDropped := readLimited(j.stderr, errOff, errLim)
+		outNext := outStart + int64(len(outData))
+		errNext := errStart + int64(len(errData))
+		return protocol.JobReadResult{
+			JobID: j.id, Status: status, ExitCode: code, Stream: "both",
+			Offset: outStart, NextOffset: outNext, Total: outTotal, Dropped: outDropped, Data: toText(outData),
+			StderrOffset: errStart, StderrNextOffset: errNext, StderrTotal: errTotal, StderrDropped: errDropped, StderrData: toText(errData),
+			Matched: matched,
+			EOF:     status != protocol.JobRunning && outNext >= outTotal && errNext >= errTotal,
+		}, nil
+	}
+
+	r := j.stdout
+	off := outOff
+	if stream == "stderr" {
+		r = j.stderr
+		off = errOff
+	}
+	data, start, total, dropped := readLimited(r, off, limit)
 	next := start + int64(len(data))
 	return protocol.JobReadResult{
 		JobID: j.id, Status: status, ExitCode: code, Stream: stream,
 		Offset: start, NextOffset: next, Total: total, Dropped: dropped,
-		Data: toText(data), EOF: status != protocol.JobRunning && next >= total,
+		Data: toText(data), Matched: matched, EOF: status != protocol.JobRunning && next >= total,
 	}, nil
 }
 
-func (j *job) waitForOutput(ctx context.Context, stream string, offset int64, wait time.Duration) {
-	r := j.stdout
-	if stream == "stderr" {
-		r = j.stderr
+func readLimited(r *ring, off int64, limit int) (data []byte, start, total, dropped int64) {
+	if limit <= 0 {
+		_, start, total, dropped = r.ReadAt(off, 0)
+		return nil, start, total, dropped
 	}
+	data, start, total, dropped = r.ReadAt(off, limit)
+	if start+int64(len(data)) < total {
+		data = cutRuneBoundary(data)
+	}
+	return data, start, total, dropped
+}
+
+func (j *job) matchesNew(stream string, outOff, errOff int64, re *regexp.Regexp) bool {
+	if stream == "stdout" || stream == "both" {
+		if data, _, _, _ := j.stdout.ReadAt(outOff, maxMatchScan); len(data) > 0 && re.Match(data) {
+			return true
+		}
+	}
+	if stream == "stderr" || stream == "both" {
+		if data, _, _, _ := j.stderr.ReadAt(errOff, maxMatchScan); len(data) > 0 && re.Match(data) {
+			return true
+		}
+	}
+	return false
+}
+
+func (j *job) waitForRead(ctx context.Context, stream string, outOff, errOff int64, wait time.Duration, waitUntil string, idleWait time.Duration, limit int, matchRe *regexp.Regexp) bool {
+	watchOut := stream == "stdout" || stream == "both"
+	watchErr := stream == "stderr" || stream == "both"
+
+	totals := func() (outTotal, errTotal int64) {
+		if watchOut {
+			_, _, outTotal, _ = j.stdout.ReadAt(outOff, 0)
+		}
+		if watchErr {
+			_, _, errTotal, _ = j.stderr.ReadAt(errOff, 0)
+		}
+		return outTotal, errTotal
+	}
+	newBytes := func(ot, et int64) int64 {
+		var n int64
+		if watchOut && ot > outOff {
+			n += ot - outOff
+		}
+		if watchErr && et > errOff {
+			n += et - errOff
+		}
+		return n
+	}
+
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
+
+	if matchRe != nil {
+		for {
+			if j.matchesNew(stream, outOff, errOff, matchRe) {
+				return true
+			}
+			select {
+			case <-j.done:
+				return j.matchesNew(stream, outOff, errOff, matchRe)
+			case <-ctx.Done():
+				return false
+			case <-deadline.C:
+				return j.matchesNew(stream, outOff, errOff, matchRe)
+			case <-tick.C:
+			}
+		}
+	}
+
+	if waitUntil == "exit" {
+		select {
+		case <-j.done:
+		case <-ctx.Done():
+		case <-deadline.C:
+		}
+		return false
+	}
+
+	if waitUntil == "idle" {
+		lastOut, lastErr := outOff, errOff
+		var lastChange time.Time
+		for {
+			ot, et := totals()
+			if (watchOut && ot > lastOut) || (watchErr && et > lastErr) {
+				lastOut, lastErr = ot, et
+				lastChange = time.Now()
+			}
+			if !lastChange.IsZero() && (time.Since(lastChange) >= idleWait || newBytes(ot, et) >= int64(limit)) {
+				return false
+			}
+			select {
+			case <-j.done:
+				return false
+			case <-ctx.Done():
+				return false
+			case <-deadline.C:
+				return false
+			case <-tick.C:
+			}
+		}
+	}
+
+	// Default "output" mode: wait for first new byte, then coalesce briefly so
+	// multi-line bursts arrive in one chunk instead of trickling byte-by-byte.
+	var firstSeen time.Time
 	for {
-		if _, _, total, _ := r.ReadAt(offset, 0); total > offset {
-			return
+		ot, et := totals()
+		nb := newBytes(ot, et)
+		if nb > 0 {
+			if nb >= int64(limit) {
+				return false
+			}
+			if firstSeen.IsZero() {
+				// Return immediately if the job has already exited.
+				select {
+				case <-j.done:
+					return false
+				default:
+				}
+				firstSeen = time.Now()
+			} else if time.Since(firstSeen) >= DefaultCoalesce {
+				return false
+			}
 		}
 		select {
 		case <-j.done:
-			return
+			return false
 		case <-ctx.Done():
-			return
+			return false
 		case <-deadline.C:
-			return
+			return false
 		case <-tick.C:
 		}
 	}

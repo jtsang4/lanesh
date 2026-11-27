@@ -41,8 +41,15 @@ func (r *ring) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// size returns the number of retained bytes.
+// size returns the number of retained bytes. Caller must hold r.mu.
 func (r *ring) size() int { return len(r.buf) }
+
+// Len returns the number of currently retained bytes safely across goroutines.
+func (r *ring) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.buf)
+}
 
 // copyOut copies retained bytes [i, j) in logical order into a new slice.
 func (r *ring) copyOut(i, j int) []byte {

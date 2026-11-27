@@ -395,23 +395,25 @@ func TestEndToEnd(t *testing.T) {
 	// Long-running commands continue in the background.
 	bg := mustCall(t, s, "exec", map[string]any{
 		"machine": "alpha", "briefing": briefA, "timeout_ms": 200,
-		"command": shellCmd("echo started; sleep 30", "Write-Output started; Start-Sleep -Seconds 30"),
+		"command": shellCmd("echo started\necho errline >&2\nsleep 30", "Write-Output started\n[Console]::Error.WriteLine('errline')\nStart-Sleep -Seconds 30"),
 	})
 	mustContain(t, "background exec", bg, "still running", "follow with job_read")
 	bgID := match(t, regexp.MustCompile(`\(job (\S+)\)\n`), bg)
-	// Wait for the first line so that the shell has really started.
-	for deadline := time.Now().Add(20 * time.Second); ; {
-		r := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID, "wait_ms": 1000})
-		if strings.Contains(r, "started") {
-			mustContain(t, "job_read running", r, "no more stdout yet; the job is running")
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("background job produced no output: %v", r)
-		}
-	}
+	// Wait with stream="both" and match for readiness output.
+	bothRead := mustCall(t, s, "job_read", map[string]any{
+		"machine": "alpha", "job_id": bgID, "stream": "both", "wait_ms": 15000, "match": "errline",
+	})
+	mustContain(t, "job_read both+match", bothRead, "matched", "[lanesh] begin stdout", "started", "[lanesh] begin stderr", "errline", "no more output yet; the job is running")
+
+	// job_list defaults to running jobs only and collapses multiline commands to one line.
 	jobs := mustCall(t, s, "job_list", map[string]any{"machine": "alpha"})
-	mustContain(t, "job_list", jobs, "2 jobs", "- "+bgID+": still running")
+	mustContain(t, "job_list running", jobs, "1 running job", "- "+bgID+": still running", "finished job omitted")
+	if strings.Contains(jobs, "\necho errline") {
+		t.Fatalf("job_list did not collapse multiline command:\n%s", jobs)
+	}
+	allJobs := mustCall(t, s, "job_list", map[string]any{"machine": "alpha", "include_finished": true})
+	mustContain(t, "job_list finished", allJobs, "2 jobs", "- "+bgID+": still running")
+
 	mustContain(t, "job_kill", mustCall(t, s, "job_kill", map[string]any{"machine": "alpha", "job_id": bgID}), "killed")
 	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID})
 	mustContain(t, "job_read", read, "started", "end of stdout; the job has finished")

@@ -446,7 +446,7 @@ func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error)
 	writeStream(&out, "stdout", st.Stdout, st.StdoutBytes)
 	writeStream(&out, "stderr", st.Stderr, st.StderrBytes)
 	if st.Status == protocol.JobRunning {
-		out.line("[lanesh] follow with job_read job_id=%q offset=%d wait_ms=30000 (stream=\"stderr\" offset=%d for stderr); stop with job_kill.",
+		out.line("[lanesh] follow with job_read job_id=%q stream=\"both\" offset=%d stderr_offset=%d wait_ms=30000 (or wait_until=\"idle\"|\"exit\"); stop with job_kill.",
 			st.JobID, st.StdoutBytes, st.StderrBytes)
 	}
 	return &out, nil
@@ -485,12 +485,16 @@ func writeStream(out *text, name, data string, total int64) {
 
 // JobReadInput reads job output.
 type JobReadInput struct {
-	Machine string `json:"machine" jsonschema:"machine name"`
-	JobID   string `json:"job_id"`
-	Stream  string `json:"stream,omitempty" jsonschema:"stdout (default) or stderr"`
-	Offset  int64  `json:"offset,omitempty" jsonschema:"byte offset"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
-	WaitMS  int    `json:"wait_ms,omitempty" jsonschema:"wait up to this long (max 60000) for new output"`
+	Machine      string `json:"machine" jsonschema:"machine name"`
+	JobID        string `json:"job_id"`
+	Stream       string `json:"stream,omitempty" jsonschema:"stdout (default), stderr, or both"`
+	Offset       int64  `json:"offset,omitempty" jsonschema:"byte offset (stdout when stream is both)"`
+	StderrOffset int64  `json:"stderr_offset,omitempty" jsonschema:"stderr byte offset when stream is both"`
+	Limit        int    `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
+	WaitMS       int    `json:"wait_ms,omitempty" jsonschema:"wait up to this long (max 60000)"`
+	WaitUntil    string `json:"wait_until,omitempty" jsonschema:"output (default, with brief coalescing), idle, or exit"`
+	IdleMS       int    `json:"idle_ms,omitempty" jsonschema:"quiet duration for wait_until=idle (default 1500, max 15000)"`
+	Match        string `json:"match,omitempty" jsonschema:"Go regex; wake as soon as new output matches"`
 }
 
 func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, error) {
@@ -498,10 +502,19 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 	if err != nil {
 		return nil, err
 	}
+	usesV2 := in.Stream == "both" || in.StderrOffset != 0 || in.WaitUntil != "" || in.IdleMS != 0 || in.Match != ""
+	if usesV2 && !m.HasFeature(protocol.FeatureJobReadWait) {
+		return nil, errors.New(olderDaemonMsg)
+	}
 	in.Offset = max(in.Offset, 0)
+	in.StderrOffset = max(in.StderrOffset, 0)
 	var res protocol.JobReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobRead,
-		protocol.JobReadParams{JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, Limit: cmp.Or(in.Limit, fileReadBudget), WaitMS: in.WaitMS}, &res)
+		protocol.JobReadParams{
+			JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, StderrOffset: in.StderrOffset,
+			Limit: cmp.Or(in.Limit, fileReadBudget), WaitMS: in.WaitMS,
+			WaitUntil: in.WaitUntil, IdleMS: in.IdleMS, Match: in.Match,
+		}, &res)
 	if err != nil {
 		return nil, protoErr(err)
 	}
@@ -510,7 +523,44 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 	if res.Status == protocol.JobExited && res.ExitCode != nil {
 		state = fmt.Sprintf("exited %d", *res.ExitCode)
 	}
-	out.line("[lanesh] job %s on %q (%s): %s bytes %d-%d of %d", res.JobID, m.Name, state, res.Stream, res.Offset, res.NextOffset, res.Total)
+	matched := ""
+	if res.Matched {
+		matched = ", matched"
+	}
+	if res.Stream == "both" {
+		out.line("[lanesh] job %s on %q (%s%s): stdout bytes %d-%d of %d, stderr bytes %d-%d of %d",
+			res.JobID, m.Name, state, matched,
+			res.Offset, res.NextOffset, res.Total,
+			res.StderrOffset, res.StderrNextOffset, res.StderrTotal)
+		if res.Offset > in.Offset {
+			out.line("[lanesh] stdout bytes %d-%d were dropped from the job's buffer and cannot be read.", in.Offset, res.Offset)
+		}
+		if res.StderrOffset > in.StderrOffset {
+			out.line("[lanesh] stderr bytes %d-%d were dropped from the job's buffer and cannot be read.", in.StderrOffset, res.StderrOffset)
+		}
+		if res.Data != "" {
+			out.line("[lanesh] begin stdout")
+			out.raw(res.Data)
+			out.line("[lanesh] end stdout")
+		}
+		if res.StderrData != "" {
+			out.line("[lanesh] begin stderr")
+			out.raw(res.StderrData)
+			out.line("[lanesh] end stderr")
+		}
+		switch {
+		case res.NextOffset < res.Total || res.StderrNextOffset < res.StderrTotal:
+			out.line("[lanesh] more output available; continue with stream=\"both\" offset=%d stderr_offset=%d", res.NextOffset, res.StderrNextOffset)
+		case res.EOF:
+			out.line("[lanesh] end of output; the job has finished.")
+		default:
+			out.line("[lanesh] no more output yet; the job is running. Continue with stream=\"both\" offset=%d stderr_offset=%d (wait_ms/wait_until waits for more).",
+				res.NextOffset, res.StderrNextOffset)
+		}
+		return &out, nil
+	}
+
+	out.line("[lanesh] job %s on %q (%s%s): %s bytes %d-%d of %d", res.JobID, m.Name, state, matched, res.Stream, res.Offset, res.NextOffset, res.Total)
 	if res.Offset > in.Offset {
 		out.line("[lanesh] bytes %d-%d were dropped from the job's buffer and cannot be read.", in.Offset, res.Offset)
 	}
@@ -583,8 +633,10 @@ func (t *Tools) jobKill(ctx context.Context, c caller, in JobKillInput) (*text, 
 
 // JobListInput lists jobs.
 type JobListInput struct {
-	Machine string `json:"machine" jsonschema:"machine name"`
-	All     bool   `json:"all,omitempty" jsonschema:"include jobs of other access keys"`
+	Machine         string `json:"machine" jsonschema:"machine name"`
+	All             bool   `json:"all,omitempty" jsonschema:"include jobs of other access keys"`
+	IncludeFinished bool   `json:"include_finished,omitempty" jsonschema:"include recently finished jobs (default: running only)"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"max jobs to list (default 20, max 100)"`
 }
 
 func (t *Tools) jobList(ctx context.Context, c caller, in JobListInput) (*text, error) {
@@ -600,10 +652,42 @@ func (t *Tools) jobList(ctx context.Context, c caller, in JobListInput) (*text, 
 	if err := t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobList, protocol.JobListParams{Owner: owner}, &res); err != nil {
 		return nil, protoErr(err)
 	}
-	var out text
-	out.line("[lanesh] %s on %q:", plural(len(res.Jobs), "job", "jobs"), m.Name)
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	limit = min(limit, 100)
+
+	var filtered []protocol.JobStatus
+	finishedOmitted := 0
 	for _, j := range res.Jobs {
-		out.line("- %s: %s; %s (cwd %s)", j.JobID, jobState(j.Status, j.ExitCode, j.DurationMS), shorten(j.Command, 200), j.Cwd)
+		if !in.IncludeFinished && j.Status != protocol.JobRunning {
+			finishedOmitted++
+			continue
+		}
+		filtered = append(filtered, j)
+	}
+	capped := 0
+	if len(filtered) > limit {
+		capped = len(filtered) - limit
+		filtered = filtered[:limit]
+	}
+
+	var out text
+	label := plural(len(filtered), "running job", "running jobs")
+	if in.IncludeFinished {
+		label = plural(len(filtered), "job", "jobs")
+	}
+	out.line("[lanesh] %s on %q:", label, m.Name)
+	for _, j := range filtered {
+		cmdLine := strings.Join(strings.Fields(j.Command), " ")
+		out.line("- %s: %s; %s (cwd %s)", j.JobID, jobState(j.Status, j.ExitCode, j.DurationMS), shorten(cmdLine, 160), j.Cwd)
+	}
+	if capped > 0 {
+		out.line("[lanesh] %d more jobs not shown; raise limit (up to 100).", capped)
+	}
+	if finishedOmitted > 0 {
+		out.line("[lanesh] %s omitted; pass include_finished=true to see them.", plural(finishedOmitted, "finished job", "finished jobs"))
 	}
 	return &out, nil
 }

@@ -30,11 +30,14 @@ const (
 	// FeatureFileLines: the daemon supports start_line/end_line and native
 	// image MIME detection on file.read.
 	FeatureFileLines = "file.lines"
+	// FeatureJobReadWait: the daemon supports stream="both", stderr_offset,
+	// wait_until ("output"|"idle"|"exit"), idle_ms, and match on job.read.
+	FeatureJobReadWait = "job.read.wait"
 )
 
 // Features returns the features daemons of this build announce.
 func Features() []string {
-	return []string{FeatureTransferParts, FeatureTransferGzip, FeatureFileLines}
+	return []string{FeatureTransferParts, FeatureTransferGzip, FeatureFileLines, FeatureJobReadWait}
 }
 
 // HTTPErrorMessage returns the message of a Lanesh HTTP error response,
@@ -317,27 +320,38 @@ type JobStatus struct {
 }
 
 // JobReadParams reads a range of a job's output. With WaitMS, the read waits
-// for output beyond Offset (or for the job to finish) before returning.
+// according to WaitUntil ("output", "idle", or "exit") or until Match matches
+// new output (or the job finishes) before returning.
 type JobReadParams struct {
-	JobID  string `json:"job_id"`
-	Stream string `json:"stream,omitempty"`
-	Offset int64  `json:"offset,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
-	WaitMS int    `json:"wait_ms,omitempty"`
+	JobID        string `json:"job_id"`
+	Stream       string `json:"stream,omitempty"`
+	Offset       int64  `json:"offset,omitempty"`
+	StderrOffset int64  `json:"stderr_offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	WaitMS       int    `json:"wait_ms,omitempty"`
+	WaitUntil    string `json:"wait_until,omitempty"`
+	IdleMS       int    `json:"idle_ms,omitempty"`
+	Match        string `json:"match,omitempty"`
 }
 
 // JobReadResult answers MethodJobRead.
 type JobReadResult struct {
-	JobID      string `json:"job_id"`
-	Status     string `json:"status"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
-	Stream     string `json:"stream"`
-	Offset     int64  `json:"offset"`
-	NextOffset int64  `json:"next_offset"`
-	Total      int64  `json:"total"`
-	Dropped    int64  `json:"dropped,omitempty"`
-	Data       string `json:"data"`
-	EOF        bool   `json:"eof"`
+	JobID            string `json:"job_id"`
+	Status           string `json:"status"`
+	ExitCode         *int   `json:"exit_code,omitempty"`
+	Stream           string `json:"stream"`
+	Offset           int64  `json:"offset"`
+	NextOffset       int64  `json:"next_offset"`
+	Total            int64  `json:"total"`
+	Dropped          int64  `json:"dropped,omitempty"`
+	Data             string `json:"data"`
+	StderrOffset     int64  `json:"stderr_offset,omitempty"`
+	StderrNextOffset int64  `json:"stderr_next_offset,omitempty"`
+	StderrTotal      int64  `json:"stderr_total,omitempty"`
+	StderrDropped    int64  `json:"stderr_dropped,omitempty"`
+	StderrData       string `json:"stderr_data,omitempty"`
+	Matched          bool   `json:"matched,omitempty"`
+	EOF              bool   `json:"eof"`
 }
 
 // JobWriteParams writes to a job's stdin.
