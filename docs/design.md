@@ -410,8 +410,9 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 **`exec(machine, briefing, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?)`**
 
 - `skill`：把工作目录设为该 skill 的目录；与 `cwd` 同时出现时，`cwd` 视为相对 skill 目录的路径。
+- `timeout_ms` 默认 30 秒，在 MCP 层上限为 60 秒（低于 Cloudflare 等反向代理约 100 秒的源站超时，避免长命令触发 524 且丢失 `job_id`；超时后任务仍在后台运行）。
 - 返回状态行（退出码和耗时，或者"仍在运行"和 `job_id`）、工作目录和 shell，以及 stdout、stderr 两段输出。输出过长时保留头尾，省略处写明如何用 `job_read` 读取。
-- 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`）和终止方法。
+- 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`、`wait_until` 和 `match`）和终止方法。
 
 **`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, match?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
 
@@ -424,7 +425,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - 内联文件读取、编辑/写入、目录树与文本检索。
 - `read_file` 默认读 20KB，支持按行号范围读取（输出带行号）或字节分页；PNG/JPEG/WebP/GIF 图片在 4MB 内直接以 MCP 原生 `ImageContent` 返回；其他二进制内容以 base64 返回。
 - `edit_file` 支持单次 `old_text` / `new_text` 或 `edits` 批量原子替换并返回 unified diff；传 `content` 时自动创建父目录并原子写入整文件（默认不覆盖，`overwrite: true` 时替换）。
-- `grep` 统一搜索普通路径或 skill 目录内的文本文件（默认字面量不区分大小写，`regex: true` 使用 Go RE2 正则，支持 `glob` 文件名过滤，最多 500 条匹配，跳过二进制、超过 2MB 文件与 `.git` / `node_modules` 等噪音目录）。传 `skill` 时限定在 skill 目录内（调用 `skill.grep`，仅需 `expose_skills`）；不传 `skill` 时搜索文件系统路径（调用 `file.grep`，需要 `allow_exec`）。
+- `grep` 统一搜索普通路径或 skill 目录内的文本文件（默认字面量不区分大小写，`regex: true` 使用 Go RE2 正则，支持 `glob` 文件名过滤，最多 500 条匹配，跳过二进制、超过 2MB 文件与 `.git` / `node_modules` 等噪音目录）。传 `skill` 时限定在 skill 目录内（调用 `skill.grep`，仅需 `expose_skills`）；不传 `skill` 时必须指定 `path`（调用 `file.grep`，需要 `allow_exec`，避免误搜整个 home 目录）。
 
 **`transfer(from_machine, from_briefing?, from_path, to_machine, to_briefing?, to_path, overwrite?)`**
 

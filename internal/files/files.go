@@ -94,7 +94,7 @@ func ReadFileWithParams(path string, p protocol.FileReadParams) (protocol.FileRe
 		return protocol.FileReadResult{}, err
 	}
 	if info.IsDir() {
-		return protocol.FileReadResult{}, fmt.Errorf("%s is a directory", path)
+		return protocol.FileReadResult{}, fmt.Errorf("%s is a directory; use list_dir instead", path)
 	}
 
 	if byLines {

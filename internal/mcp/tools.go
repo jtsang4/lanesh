@@ -241,12 +241,12 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 			where = res.Path + "/"
 		}
 		out.line("[lanesh] skill %q on %q, directory %s (skill directory %s)", res.Skill, m.Name, where, res.Dir)
-		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines, "grep")
+		writeTree(&out, res.Path, "", res.Files, res.FilesTruncated, maxTreeLines)
 	case in.Path == "":
 		out.line("[lanesh] skill %q on %q: SKILL.md and its files (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
 		out.line("Files:")
-		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines, "grep")
+		writeTree(&out, "", "", res.Files, res.FilesTruncated, skillTreeLines)
 	default:
 		out.line("[lanesh] skill %q on %q (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
@@ -315,7 +315,7 @@ func writeFile(out *text, name, content, encoding string, offset, total int64, s
 	}
 }
 
-func writeTree(out *text, root string, entries []protocol.FileEntry, truncated bool, maxLines int, grepTool string) {
+func writeTree(out *text, root, hintBase string, entries []protocol.FileEntry, truncated bool, maxLines int) {
 	lines, collapsed, omitted := renderTree(root, entries, maxLines)
 	if len(lines) == 0 {
 		out.line("(empty)")
@@ -324,15 +324,33 @@ func writeTree(out *text, root string, entries []protocol.FileEntry, truncated b
 		out.raw(l)
 	}
 	if len(collapsed) > 0 {
-		out.line("[lanesh] %s collapsed to fit; list one with its path, e.g. path=%q.", plural(len(collapsed), "directory", "directories"), collapsed[0])
+		example := collapsed[0]
+		if hintBase != "" {
+			example = joinRemotePath(hintBase, strings.TrimSuffix(example, "/"))
+		}
+		out.line("[lanesh] %s collapsed to fit; list one with its path, e.g. path=%q.", plural(len(collapsed), "directory", "directories"), example)
 	}
 	if omitted > 0 {
-		out.line("[lanesh] %d more entries not shown; use %s or read files by path.", omitted, grepTool)
+		out.line("[lanesh] %d more entries not shown; use grep or read files by path.", omitted)
 	}
 	if truncated {
 		out.line("[lanesh] the listing stopped at %d entries; list a subdirectory to see the rest.", len(entries))
 	}
 }
+
+// joinRemotePath joins a slash-separated relative path onto a remote directory
+// path using the remote OS's separator (Unix '/' or Windows '\').
+func joinRemotePath(base, relSlash string) string {
+	if strings.Contains(base, `\`) && !strings.Contains(base, "/") {
+		return strings.TrimRight(base, `\`) + `\` + strings.ReplaceAll(relSlash, "/", `\`)
+	}
+	return strings.TrimRight(base, "/") + "/" + relSlash
+}
+
+// maxMCPExecWait caps foreground exec waits in MCP below common reverse-proxy
+// origin timeouts (such as Cloudflare's 100s) so long commands cleanly return
+// a job_id instead of timing out mid-request.
+const maxMCPExecWaitMS = 60_000
 
 // --- exec ---
 
@@ -341,12 +359,12 @@ type ExecInput struct {
 	Machine    string            `json:"machine"`
 	Briefing   string            `json:"briefing" jsonschema:"briefing token"`
 	Command    string            `json:"command"`
-	Cwd        string            `json:"cwd,omitempty" jsonschema:"working dir (relative to skill or home)"`
+	Cwd        string            `json:"cwd,omitempty" jsonschema:"abs or relative to skill/home"`
 	Skill      string            `json:"skill,omitempty" jsonschema:"run in this skill's dir"`
 	Shell      string            `json:"shell,omitempty" jsonschema:"override shell (bash, pwsh, cmd)"`
 	Env        map[string]string `json:"env,omitempty"`
 	Stdin      string            `json:"stdin,omitempty"`
-	TimeoutMS  int               `json:"timeout_ms,omitempty" jsonschema:"wait ms (default 30000, max 600000)"`
+	TimeoutMS  int               `json:"timeout_ms,omitempty" jsonschema:"wait ms (default 30000, max 60000; long commands continue as jobs)"`
 	Background bool              `json:"background,omitempty" jsonschema:"return job_id immediately"`
 }
 
@@ -358,10 +376,14 @@ func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error)
 	if err := requirePolicy(m, true); err != nil {
 		return nil, err
 	}
+	timeoutMS := in.TimeoutMS
+	if timeoutMS > maxMCPExecWaitMS {
+		timeoutMS = maxMCPExecWaitMS
+	}
 	var st protocol.JobStatus
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodExecStart, protocol.ExecParams{
 		Command: in.Command, Cwd: in.Cwd, Skill: in.Skill, Shell: in.Shell, Env: in.Env, Stdin: in.Stdin,
-		TimeoutMS: in.TimeoutMS, Background: in.Background, Owner: c.keyID, MaxOutput: execMaxOutput,
+		TimeoutMS: timeoutMS, Background: in.Background, Owner: c.keyID, MaxOutput: execMaxOutput,
 	}, &st)
 	detail := map[string]any{"command": truncate(in.Command, 1000), "cwd": in.Cwd, "skill": in.Skill}
 	if err == nil {
@@ -701,7 +723,7 @@ func writeFileLines(out *text, res protocol.FileReadResult) {
 	out.line("[lanesh] end %s", res.Path)
 	if res.Truncated || (res.TotalLines > 0 && res.EndLine < res.TotalLines) {
 		if res.TotalLines > 0 {
-			out.line("[lanesh] %s continues: %d more lines; read on with start_line=%d", res.Path, res.TotalLines-res.EndLine, res.EndLine+1)
+			out.line("[lanesh] %s continues: %s; read on with start_line=%d", res.Path, plural(res.TotalLines-res.EndLine, "more line", "more lines"), res.EndLine+1)
 		} else {
 			out.line("[lanesh] %s continues; read on with start_line=%d", res.Path, res.EndLine+1)
 		}
@@ -715,8 +737,8 @@ type EditFileInput struct {
 	Path      string                `json:"path" jsonschema:"abs or home-relative"`
 	OldText   string                `json:"old_text,omitempty" jsonschema:"unique text to replace"`
 	NewText   string                `json:"new_text,omitempty" jsonschema:"replacement"`
-	Edits     []protocol.FileEditOp `json:"edits,omitempty" jsonschema:"atomic [{old_text, new_text}]"`
-	Content   string                `json:"content,omitempty" jsonschema:"write full file (creates dirs)"`
+	Edits     []protocol.FileEditOp `json:"edits,omitempty" jsonschema:"ordered atomic [{old_text, new_text}]"`
+	Content   string                `json:"content,omitempty" jsonschema:"write whole file (creates dirs; fails if exists unless overwrite)"`
 	Overwrite bool                  `json:"overwrite,omitempty" jsonschema:"with content, replace existing"`
 }
 
@@ -787,9 +809,9 @@ func (t *Tools) editFile(ctx context.Context, c caller, in EditFileInput) (*text
 type ListDirInput struct {
 	Machine       string `json:"machine"`
 	Briefing      string `json:"briefing" jsonschema:"briefing token"`
-	Path          string `json:"path,omitempty" jsonschema:"default: home"`
+	Path          string `json:"path,omitempty" jsonschema:"abs or home-relative (default: home)"`
 	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"default 4, max 16"`
-	IncludeHidden bool   `json:"include_hidden,omitempty"`
+	IncludeHidden bool   `json:"include_hidden,omitempty" jsonschema:"include dotfiles (still skips .git, node_modules, etc.)"`
 }
 
 func (t *Tools) listDir(ctx context.Context, c caller, in ListDirInput) (*text, error) {
@@ -812,7 +834,7 @@ func (t *Tools) listDir(ctx context.Context, c caller, in ListDirInput) (*text, 
 		out.raw(notice)
 	}
 	out.line("[lanesh] directory %s on %q:", res.Path, m.Name)
-	writeTree(&out, "", res.Entries, res.Truncated, maxTreeLines, "grep")
+	writeTree(&out, "", res.Path, res.Entries, res.Truncated, maxTreeLines)
 	return &out, nil
 }
 
@@ -821,10 +843,10 @@ type GrepInput struct {
 	Machine       string `json:"machine"`
 	Briefing      string `json:"briefing" jsonschema:"briefing token"`
 	Pattern       string `json:"pattern"`
-	Path          string `json:"path,omitempty" jsonschema:"file/dir (relative to skill or home)"`
+	Path          string `json:"path,omitempty" jsonschema:"file/dir (required unless skill is set; relative to skill or home)"`
 	Skill         string `json:"skill,omitempty" jsonschema:"search inside this skill"`
-	Regex         bool   `json:"regex,omitempty" jsonschema:"Go regex"`
-	CaseSensitive bool   `json:"case_sensitive,omitempty"`
+	Regex         bool   `json:"regex,omitempty" jsonschema:"Go regex (default: literal)"`
+	CaseSensitive bool   `json:"case_sensitive,omitempty" jsonschema:"default: case-insensitive"`
 	Glob          string `json:"glob,omitempty" jsonschema:"filename glob, e.g. *.go"`
 	MaxMatches    int    `json:"max_matches,omitempty" jsonschema:"default 100, max 500"`
 }
@@ -836,6 +858,9 @@ func (t *Tools) grep(ctx context.Context, c caller, in GrepInput) (*text, error)
 	}
 	if in.Pattern == "" {
 		return nil, errors.New("pattern is required")
+	}
+	if strings.TrimSpace(in.Skill) == "" && strings.TrimSpace(in.Path) == "" {
+		return nil, errors.New("give path or skill")
 	}
 	var (
 		header        string

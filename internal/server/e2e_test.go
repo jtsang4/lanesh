@@ -438,6 +438,9 @@ func TestEndToEnd(t *testing.T) {
 	mustContain(t, "list_dir", ld, "report.txt")
 	gf := mustCall(t, s, "grep", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out", "pattern": "THREE", "glob": "*.txt"})
 	mustContain(t, "grep files", gf, "1 match in 1 of 1 file", "report.txt:3: line THREE")
+	if _, errText := call(t, s, "grep", map[string]any{"machine": "alpha", "briefing": briefA, "pattern": "THREE"}); !strings.Contains(errText, "give path or skill") {
+		t.Fatalf("grep without path/skill must fail: %q", errText)
+	}
 
 	// Native image reading returns ImageContent alongside the framed text header.
 	var pngBuf bytes.Buffer

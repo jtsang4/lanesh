@@ -201,3 +201,20 @@ func TestEstimateTokensAndShorten(t *testing.T) {
 		t.Fatalf("shorten = %q", s)
 	}
 }
+
+func TestWriteTreeHintBase(t *testing.T) {
+	entries := make([]protocol.FileEntry, 0, 200)
+	for i := range 200 {
+		entries = append(entries, protocol.FileEntry{Path: fmt.Sprintf("sub/file-%03d.txt", i), Size: 10})
+	}
+	var unixOut text
+	writeTree(&unixOut, "", "/data00/repo", entries, false, 10)
+	if !strings.Contains(unixOut.String(), `path="/data00/repo/sub"`) {
+		t.Fatalf("unix collapsed hint = %s", unixOut.String())
+	}
+	var winOut text
+	writeTree(&winOut, "", `C:\Users\dev\repo`, entries, false, 10)
+	if !strings.Contains(winOut.String(), `path="C:\\Users\\dev\\repo\\sub"`) {
+		t.Fatalf("windows collapsed hint = %s", winOut.String())
+	}
+}
