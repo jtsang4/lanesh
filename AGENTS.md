@@ -47,10 +47,12 @@ scripts/install-test.sh                # install.sh / install.ps1 tests against 
 
 ### MCP Tools & Context Budget
 
-Every connected agent pays for Lanesh's MCP tool definitions and server instructions on every turn (or on schema load), so treat context as a hard budget:
+Every connected agent pays for Lanesh's MCP tool definitions and server instructions on every turn (or on schema load). Optimize for **high information density and first-try accuracy**, not bare minimum word count — an ambiguous description that causes one wrong call or retry costs far more context than a few extra words:
 
-- Prefer extending or unifying an existing tool over adding a new one (for example, `edit_file` handles both surgical edits and whole-file writes; `grep` searches both filesystem paths and skills). Do not expose overlapping or low-value MCP tools when an existing tool or CLI command already covers the case.
-- Keep tool descriptions and `jsonschema` tags minimal yet sufficient: include only what a model needs to choose the right tool and supply valid arguments. Omit tags that merely restate the field name (such as `machine name` on `machine`), and avoid repeating global rules already stated in server instructions.
+- Prefer extending or unifying an existing tool over adding a new one (for example, `edit_file` handles both surgical edits and whole-file writes; `grep` searches both filesystem paths and skills). Do not expose overlapping tools or rarely-tuned knobs in MCP when a sensible default or CLI flag covers the case.
+- Choose defaults so the simplest call does the right thing (for example, `job_read` defaults to `both` streams so `stderr` is not silently missed).
+- Cut boilerplate, keep load-bearing semantics: omit tags that merely restate a field name (`machine name` on `machine`) or repeat server instructions, but explicitly state every non-obvious default, parameter precedence/interaction, scope boundary, or side effect that a cold-start agent could otherwise misread (such as `match` overriding `wait_until` and matching only new output).
+- Use progressive disclosure for situational guidance: put follow-up parameter hints and examples in tool output at the moment they are needed (for example, `exec` printing the `job_read` follow-up line when a command stays running) instead of bloating static `tools/list` descriptions.
 - Keep `instructionsHead` within 512 characters, full `Instructions` within 2,000 characters, and `TestMCPSchemaContextBudget` in `internal/mcp/schema_test.go` passing whenever changing MCP tools.
 
 ### Web UI

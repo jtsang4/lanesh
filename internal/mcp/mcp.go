@@ -176,7 +176,7 @@ func (t *Tools) register(s *mcp.Server) {
 	add(s, tool("get_project", "Get a project's live locations and Markdown context; omit project to list all.", ro), t.getProject)
 	add(s, tool("update_project", "Create or edit a project (prefer old_text/new_text for partial edits).", &mcp.ToolAnnotations{DestructiveHint: ptr(false)}), t.updateProject)
 	add(s, tool("exec", "Run a shell command on a machine; continues as a job after timeout_ms (default 30000).", &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)}), t.exec)
-	add(s, tool("job_read", "Read or wait for job output (stdout, stderr, or both).", ro), t.jobRead)
+	add(s, tool("job_read", "Read or wait for job output (default both streams). Wait for new output, idle, exit, or a regex match.", ro), t.jobRead)
 	add(s, tool("job_kill", "Stop a job and its children.", rw), t.jobKill)
 	add(s, tool("job_list", "List running jobs on a machine (include_finished for recent completed).", ro), t.jobList)
 	add(s, tool("read_file", "Read a file (lines or byte range; PNG/JPEG/WebP/GIF returned as images).", ro), t.readFile)

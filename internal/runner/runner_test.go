@@ -171,7 +171,7 @@ func TestRingAndInlineTruncation(t *testing.T) {
 	_, _ = big.Write([]byte(strings.Repeat("a", 500) + strings.Repeat("b", 500)))
 	text, total, truncated := inline(big, "stdout", 100)
 	if !truncated || total != 1000 || !strings.HasPrefix(text, strings.Repeat("a", 50)) ||
-		!strings.HasSuffix(text, strings.Repeat("b", 50)) || !strings.Contains(text, "900 bytes omitted here; read them with job_read offset=50") {
+		!strings.HasSuffix(text, strings.Repeat("b", 50)) || !strings.Contains(text, "900 bytes omitted here; read them with job_read stream=stdout offset=50") {
 		t.Fatalf("inline = %q", text)
 	}
 

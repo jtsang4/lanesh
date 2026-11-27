@@ -413,10 +413,10 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - 返回状态行（退出码和耗时，或者"仍在运行"和 `job_id`）、工作目录和 shell，以及 stdout、stderr 两段输出。输出过长时保留头尾，省略处写明如何用 `job_read` 读取。
 - 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`）和终止方法。
 
-**`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, idle_ms?, match?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
+**`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, match?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
 
-- 分别用于分段读取输出、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`（stdin 交互写入仅保留在控制协议 `job.write` 与消费侧 CLI `lanesh jobs write` 中，不在 MCP 暴露以节省上下文）。
-- `job_read` 支持 `stream: "stdout" | "stderr" | "both"`、`wait_until: "output" | "idle" | "exit"`（`output` 模式带 300ms 聚包，避免逐字唤醒；`wait_ms` 上限 60 秒）与 `match` 正则匹配唤醒；写明本次读取的字节范围与继续读取的 `offset` / `stderr_offset`。被环形缓冲丢弃的范围也会写明。
+- 分别用于分段读取输出、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`（stdin 交互写入与自定义静默窗口 `idle_ms` 仅保留在控制协议 `job.write` / `job.read` 与消费侧 CLI 中，不在 MCP 暴露以节省上下文）。
+- `job_read` 支持 `stream: "both" | "stdout" | "stderr"`（MCP 端对支持 `job.read.wait` 的守护进程默认 `both`，避免遗漏 `stderr`）、`wait_until: "output" | "idle" | "exit"`（`output` 带 300ms 聚包，`idle` 在收到新输出并静默 1.5s 后返回）与 `match` 正则匹配唤醒（仅匹配新输出且覆盖 `wait_until`）；`wait_ms` 上限 60 秒，传 `wait_until` 或 `match` 时默认 30 秒。写明本次读取的字节范围与继续读取的 `offset` / `stderr_offset`，被环形缓冲丢弃的范围也会写明。
 - `job_list` 默认只列出当前 access key 正在运行的任务并将多行命令折叠为单行；`include_finished: true` 包含最近保留的已结束任务（默认上限 20，最高 100），`all: true` 列出该 Lane 在这台机器上的全部任务。
 
 **`read_file(machine, briefing, path, start_line?, end_line?, offset?, limit?)`**、**`edit_file(machine, briefing, path, old_text?, new_text?, edits?, content?, overwrite?)`**、**`list_dir(machine, briefing, path?, max_depth?, include_hidden?)`**、**`grep(machine, briefing, pattern, path?, skill?, regex?, case_sensitive?, glob?, max_matches?)`**

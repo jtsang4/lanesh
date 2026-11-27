@@ -397,13 +397,13 @@ func TestEndToEnd(t *testing.T) {
 		"machine": "alpha", "briefing": briefA, "timeout_ms": 200,
 		"command": shellCmd("echo started\necho errline >&2\nsleep 30", "Write-Output started\n[Console]::Error.WriteLine('errline')\nStart-Sleep -Seconds 30"),
 	})
-	mustContain(t, "background exec", bg, "still running", "follow with job_read")
+	mustContain(t, "background exec", bg, "still running", "follow with job_read", `match="..."`)
 	bgID := match(t, regexp.MustCompile(`\(job (\S+)\)\n`), bg)
-	// Wait with stream="both" and match for readiness output.
+	// job_read defaults to stream="both" (and auto-waits up to 30s when match is set), catching stderr readiness lines without specifying stream.
 	bothRead := mustCall(t, s, "job_read", map[string]any{
-		"machine": "alpha", "job_id": bgID, "stream": "both", "wait_ms": 15000, "match": "errline",
+		"machine": "alpha", "job_id": bgID, "match": "errline",
 	})
-	mustContain(t, "job_read both+match", bothRead, "matched", "[lanesh] begin stdout", "started", "[lanesh] begin stderr", "errline", "no more output yet; the job is running")
+	mustContain(t, "job_read default both+match", bothRead, "matched", "[lanesh] begin stdout", "started", "[lanesh] begin stderr", "errline", "no more output yet; the job is running")
 
 	// job_list defaults to running jobs only and collapses multiline commands to one line.
 	jobs := mustCall(t, s, "job_list", map[string]any{"machine": "alpha"})
@@ -416,7 +416,9 @@ func TestEndToEnd(t *testing.T) {
 
 	mustContain(t, "job_kill", mustCall(t, s, "job_kill", map[string]any{"machine": "alpha", "job_id": bgID}), "killed")
 	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID})
-	mustContain(t, "job_read", read, "started", "end of stdout; the job has finished")
+	mustContain(t, "job_read default both finished", read, "started", "errline", "end of output; the job has finished")
+	readOut := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID, "stream": "stdout"})
+	mustContain(t, "job_read explicit stdout", readOut, "started", "end of stdout; the job has finished")
 
 	// Files, editing (create + surgical edits + overwrite), directory listing, grep, image reading, and transfers.
 	mustContain(t, "edit_file create", mustCall(t, s, "edit_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha\nline two\nline three\n"}), "wrote 37 B")

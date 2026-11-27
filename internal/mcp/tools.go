@@ -387,7 +387,7 @@ func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error)
 	writeStream(&out, "stdout", st.Stdout, st.StdoutBytes)
 	writeStream(&out, "stderr", st.Stderr, st.StderrBytes)
 	if st.Status == protocol.JobRunning {
-		out.line("[lanesh] follow with job_read job_id=%q stream=\"both\" offset=%d stderr_offset=%d wait_ms=30000 (or wait_until=\"idle\"|\"exit\"); stop with job_kill.",
+		out.line("[lanesh] follow with job_read job_id=%q offset=%d stderr_offset=%d wait_ms=30000 (or wait_until=\"idle\"|\"exit\", match=\"...\"); stop with job_kill.",
 			st.JobID, st.StdoutBytes, st.StderrBytes)
 	}
 	return &out, nil
@@ -428,14 +428,13 @@ func writeStream(out *text, name, data string, total int64) {
 type JobReadInput struct {
 	Machine      string `json:"machine"`
 	JobID        string `json:"job_id"`
-	Stream       string `json:"stream,omitempty" jsonschema:"stdout (default), stderr, or both"`
+	Stream       string `json:"stream,omitempty" jsonschema:"both (default), stdout, or stderr"`
 	Offset       int64  `json:"offset,omitempty" jsonschema:"byte offset (stdout if both)"`
 	StderrOffset int64  `json:"stderr_offset,omitempty" jsonschema:"stderr byte offset (if both)"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"max bytes (default 20480)"`
-	WaitMS       int    `json:"wait_ms,omitempty" jsonschema:"max wait ms (cap 60000)"`
-	WaitUntil    string `json:"wait_until,omitempty" jsonschema:"output (default), idle, or exit"`
-	IdleMS       int    `json:"idle_ms,omitempty" jsonschema:"quiet ms for idle (default 1500)"`
-	Match        string `json:"match,omitempty" jsonschema:"Go regex to wake on"`
+	WaitMS       int    `json:"wait_ms,omitempty" jsonschema:"max wait ms (cap 60000; default 30000 with wait_until/match, else 0)"`
+	WaitUntil    string `json:"wait_until,omitempty" jsonschema:"output (default), idle (new output then quiet), or exit"`
+	Match        string `json:"match,omitempty" jsonschema:"Go regex on new output (overrides wait_until)"`
 }
 
 func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, error) {
@@ -443,18 +442,26 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 	if err != nil {
 		return nil, err
 	}
-	usesV2 := in.Stream == "both" || in.StderrOffset != 0 || in.WaitUntil != "" || in.IdleMS != 0 || in.Match != ""
+	usesV2 := in.Stream == "both" || in.StderrOffset != 0 || in.WaitUntil != "" || in.Match != ""
 	if usesV2 && !m.HasFeature(protocol.FeatureJobReadWait) {
 		return nil, errors.New(olderDaemonMsg)
+	}
+	stream := in.Stream
+	if stream == "" {
+		if m.HasFeature(protocol.FeatureJobReadWait) {
+			stream = "both"
+		} else {
+			stream = "stdout"
+		}
 	}
 	in.Offset = max(in.Offset, 0)
 	in.StderrOffset = max(in.StderrOffset, 0)
 	var res protocol.JobReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobRead,
 		protocol.JobReadParams{
-			JobID: in.JobID, Stream: in.Stream, Offset: in.Offset, StderrOffset: in.StderrOffset,
+			JobID: in.JobID, Stream: stream, Offset: in.Offset, StderrOffset: in.StderrOffset,
 			Limit: cmp.Or(in.Limit, fileReadBudget), WaitMS: in.WaitMS,
-			WaitUntil: in.WaitUntil, IdleMS: in.IdleMS, Match: in.Match,
+			WaitUntil: in.WaitUntil, Match: in.Match,
 		}, &res)
 	if err != nil {
 		return nil, protoErr(err)
@@ -491,11 +498,11 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 		}
 		switch {
 		case res.NextOffset < res.Total || res.StderrNextOffset < res.StderrTotal:
-			out.line("[lanesh] more output available; continue with stream=\"both\" offset=%d stderr_offset=%d", res.NextOffset, res.StderrNextOffset)
+			out.line("[lanesh] more output available; continue with offset=%d stderr_offset=%d", res.NextOffset, res.StderrNextOffset)
 		case res.EOF:
 			out.line("[lanesh] end of output; the job has finished.")
 		default:
-			out.line("[lanesh] no more output yet; the job is running. Continue with stream=\"both\" offset=%d stderr_offset=%d (wait_ms/wait_until waits for more).",
+			out.line("[lanesh] no more output yet; the job is running. Continue with offset=%d stderr_offset=%d (wait_ms/wait_until/match waits for more).",
 				res.NextOffset, res.StderrNextOffset)
 		}
 		return &out, nil
