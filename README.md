@@ -129,20 +129,36 @@ Any MCP client that supports Streamable HTTP works. Pass the access key as `Auth
 | `describe_machine` | A machine's environment, permissions and installed skills, plus a **briefing token** |
 | `find_skills` | Optional quick keyword search over skill names and descriptions on every machine |
 | `read_skill` | `SKILL.md` with the skill's file tree, a directory listing, or one or more files |
-| `grep_skill` | Search a skill's text files on its machine |
 | `exec` | Run a command; long commands continue as background jobs |
-| `job_read` / `job_write` / `job_kill` / `job_list` | Follow, feed and stop background jobs |
-| `read_file` / `write_file` | Small inline file operations |
-| `transfer` | Stream a file or directory from one machine to another |
-| `get_project` / `update_project` | Read or change a project: where some work lives and what an agent should know about it |
+| `job_read` / `job_kill` / `job_list` | Follow (stdout/stderr/both, `wait_until`, regex `match`), list and stop background jobs |
+| `read_file` | Read files by line range or byte offset; PNG/JPEG/WebP/GIF images return natively |
+| `edit_file` | Surgical unique-match edits (single or atomic batch with unified diff) or whole-file writes up to 1 MiB |
+| `list_dir` / `grep` | Compact directory trees and text/regex search across paths or skills |
+| `transfer` | Stream a file or directory from one machine to another with verified SHA-256 |
+| `get_project` / `update_project` | Read or change a project: live locations (real path, Git branch/commit, worktree, `AGENTS.md`/`CLAUDE.md`) and Markdown context |
 
-A **project** says where some work lives (a machine and a path, or several) and what an agent should know about it: free Markdown for what it is, its rules and where it stands. Locations are a guide, not a limit. Reading a project checks each location on its machine (does the path exist, which Git branch, is it a worktree, does it have `AGENTS.md` or `CLAUDE.md`), so nothing that a machine can report goes stale. Manage projects in the web UI, or tell an agent to.
+A **project** says where some work lives (a machine and a path, or several) and what an agent should know about it: free Markdown for what it is, its rules and where it stands. Locations are a guide, not a limit. Reading a project checks each location on its machine (does the path exist, canonical symlink path, Git branch and short commit, worktree, `AGENTS.md` or `CLAUDE.md`), so nothing that a machine can report goes stale. Manage projects in the web UI, via the CLI, or through an agent.
 
 ![A project with live location checks, Markdown context and revision history](docs/images/project-dark.png)
 
 Results are compact plain text kept within a token budget. Whatever Lanesh leaves out (long output, large skill trees, the rest of a file) is stated in place with how to get it, and every result ends with `[lanesh] end of result`, so an agent can tell when its client cut a result short.
 
-Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine`. It makes the agent look at a machine's environment and skills before acting on it. When a call has no valid token (the agent forgot it, or the machine's skills changed), nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step. If the skills changed, the briefing starts with what changed since that agent's own last briefing (new, updated and removed skills), so a long-running session knows which skills to re-read while a new session simply sees the current state.
+Every tool that touches a machine requires that machine's briefing token, a short value such as `build-box:k3f9q2ab` returned by `describe_machine` (`transfer` skips it for your own machine). When a call has no known token, nothing runs and the reply is the machine's current briefing with its token, so the agent catches up and retries in one step. When an agent holds a known token and unrelated skills change in the background, the call still runs and prepends a compact update notice with the new token and diff; only calls targeting a changed skill are blocked with a compact diff-only briefing.
+
+## Using the client CLI
+
+With an access key, you can also drive any machine in a lane directly from your terminal or scripts (useful when MCP is unavailable or for quick transfers):
+
+```sh
+lanesh connect https://lanesh.example.com/lanes/<lane-id> --key <access-key>
+lanesh machines
+lanesh exec devbox --cwd ~/repo -- go test ./...
+lanesh cp ./dist/app.pkg bytemac:~/Downloads/app.pkg --overwrite
+lanesh read devbox:~/repo/main.go --lines 1-60
+lanesh edit devbox:~/app/config.yaml --old "debug: false" --new "debug: true"
+lanesh ls devbox:~/repo && lanesh grep devbox:~/repo "TODO" --glob "*.go"
+lanesh project get storefront
+```
 
 ## Installing the CLI
 

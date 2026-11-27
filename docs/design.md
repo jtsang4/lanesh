@@ -147,7 +147,7 @@ lanesh join https://lanesh.example.com/lanes/<lane-id> --key lsj_xxx [--name my-
 # ~/.lanesh/config.toml
 [policy]
 expose_skills = true   # 是否开放 skill 列表与读取
-allow_exec = true      # 是否开放执行与通用文件操作（exec、read_file、write_file、transfer）
+allow_exec = true      # 是否开放执行与通用文件操作（exec、read_file、edit_file、list_dir、grep、transfer）
 ```
 
 - `allow_exec` 默认为 `true`。`lanesh join` 时会明确提示风险，`--no-exec` 可在加入时关闭。
@@ -202,7 +202,7 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 - 返回给 Agent 的输出有内联上限（stdout 与 stderr 合并默认 6,500 字节且受宽字符 token 预算约束，保留头部和尾部，避开主流客户端约 10 KB 落盘线导致的双重截断），省略处写明省略了多少字节、用哪个 `offset` 通过 `job_read` 读取。`job_read` 每次默认读 20KB，支持 `stream: "both"` 同次读取双流、`wait_until: "output" | "idle" | "exit"`（含 300ms 聚包窗口）及 `match` 正则唤醒，`wait_ms` 上限 60 秒以安全低于反向代理超时。
 - 任务记录发起它的 access key（`owner`）。`job_list` 默认只列出当前 access key 正在运行的任务（按需传 `include_finished` / `limit` / `all` 查看历史或其他 key 的任务），命令摘要折叠为单行。
 - 任务按 Lane 隔离：一个 Lane 发起的任务，只能在同一个 Lane 里读取、写入和终止。
-- 前台执行（未设置 `background`）在写完可选的 `stdin` 后立即关闭标准输入，避免命令等待输入而挂起；`background: true` 时保持标准输入打开，供 `job_write` 使用。
+- 前台执行（未设置 `background`）在写完可选的 `stdin` 后立即关闭标准输入，避免命令等待输入而挂起；`background: true` 时保持标准输入打开，供控制协议 `job.write` 与消费侧 CLI `lanesh jobs write` 使用。
 - 守护进程重启时，所有正在运行的任务都会被终止。
 
 **PTY 预留**
@@ -213,11 +213,12 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 
 ### 5.4 文件操作
 
-- `read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` 通过控制通道内联传输，适合文本、目录检索与小文件，文本内联上限默认 1MB（超过时提示改用 `transfer`）。
+- `read_file` / `edit_file` / `list_dir` / `grep`（以及协议层的 `file.write`）通过控制通道内联传输，适合文本、目录检索与小文件，文本内联上限默认 1MB（超过时提示改用 `transfer`）。
 - `read_file` 支持按行号范围读取（`start_line` / `end_line`）或按字节分页（`offset` / `limit`）；遇到常见图片格式（PNG / JPEG / WebP / GIF）且体积不超过 4MB 时，直接以 MCP 原生 `ImageContent` 返回给多模态 Agent；其他二进制内容使用 `base64` 编码。
-- `write_file` 支持 `overwrite`、`create_dirs`、`mode`（Unix 权限位），写入时先写临时文件再原子重命名。
-- `edit_file` 对 UTF-8 文本文件执行单段或批量原子局部替换（每段 `old_text` 必须恰好匹配一次，任一段失败不改磁盘），保留原文件权限位并原子替换，返回精简 unified diff。
-- `list_dir` 返回紧凑目录树（跳过 `.git`、`node_modules`、`__pycache__`、`.venv` 等噪音目录，默认跳过隐藏项与最多 4 层、500 条目）；`grep_files` 在机器端搜索文本文件（支持字面量、Go 正则与文件名 `glob` 过滤）。
+- `edit_file` 统一承担精准修改与整文件写入：
+  - 传入 `old_text` / `new_text` 或 `edits` 数组时，对 UTF-8 文本文件执行单段或批量原子局部替换（每段 `old_text` 必须恰好匹配一次，任一段失败不改磁盘），保留原文件权限位并原子替换，返回精简 unified diff。
+  - 传入 `content` 时，自动创建父目录并原子写入整个文件（默认不覆盖已存在文件，传 `overwrite: true` 时覆盖）。控制协议与消费侧 CLI（`lanesh write`）继续保留 `file.write` 方法（含 `encoding`、`mode` 等参数）。
+- `list_dir` 返回紧凑目录树（跳过 `.git`、`node_modules`、`__pycache__`、`.venv` 等噪音目录，默认跳过隐藏项与最多 4 层、500 条目）；`grep` 在机器端搜索文本文件（支持字面量、Go 正则与文件名 `glob` 过滤；传 `skill` 时限定在 skill 目录内搜索且仅要求 `expose_skills`）。
 - 路径支持 `~` 展开，相对路径以用户 home 为基准。
 
 ## 6. 控制协议
@@ -355,7 +356,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 ### 8.3 工具
 
-工具描述和参数说明遵循"最小且必要"原则：只写模型选对工具、填对参数所需的内容，因为每个连接的客户端都会把它们放进上下文。
+工具数量、描述和参数说明严格遵循"最小且必要"原则：只保留无法被现有工具自然吸收的能力（例如 `edit_file` 同时承担局部编辑与整文件写入，`grep` 同时搜索普通路径与 skill 目录），描述只写模型选对工具、填对参数所需的最少内容，避免连接 Lanesh 占用过多 Agent 上下文（由 `internal/mcp/schema_test.go` 中的上下文预算回归测试守护）。
 
 **结果格式**
 
@@ -406,28 +407,24 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - 二进制文件只说明大小，不返回内容。
 - 只允许访问 skill 目录内的路径，拒绝路径穿越；只依赖 `expose_skills`，不依赖 `allow_exec`。
 
-**`grep_skill(machine, briefing, skill, pattern, path?, regex?, case_sensitive?, max_matches?)`**
-
-- 在 skill 的文本文件中搜索，默认按字面量、不区分大小写；`regex: true` 时按 Go（RE2）正则表达式匹配。
-- 每个匹配一行 `文件:行号: 内容`，行内容最多 240 字符。默认最多 100 个匹配（上限 500），达到上限时写明还有更多。
-- 跳过二进制文件、超过 2MB 的文件（会列出）和 `node_modules`、`.git` 等目录。`path` 限定在某个文件或目录内。
-- 搜索在机器上完成（守护进程方法 `skill.grep`），不需要把文件传回 Server。
-
 **`exec(machine, briefing, command, cwd?, skill?, shell?, env?, stdin?, timeout_ms?, background?)`**
 
 - `skill`：把工作目录设为该 skill 的目录；与 `cwd` 同时出现时，`cwd` 视为相对 skill 目录的路径。
 - 返回状态行（退出码和耗时，或者"仍在运行"和 `job_id`）、工作目录和 shell，以及 stdout、stderr 两段输出。输出过长时保留头尾，省略处写明如何用 `job_read` 读取。
 - 仍在运行时，写明继续读取的 `job_read` 参数（包括 stdout 和 stderr 各自的 `offset`）和终止方法。
 
-**`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, idle_ms?, match?)`**、**`job_write(machine, job_id, data?, close_stdin?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
+**`job_read(machine, job_id, stream?, offset?, stderr_offset?, limit?, wait_ms?, wait_until?, idle_ms?, match?)`**、**`job_kill(machine, job_id, signal?)`**、**`job_list(machine, all?, include_finished?, limit?)`**
 
-- 分别用于分段读取输出、写入 stdin、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`。
+- 分别用于分段读取输出、终止任务、列出任务。任务保存在机器上，所以都需要 `machine`（stdin 交互写入仅保留在控制协议 `job.write` 与消费侧 CLI `lanesh jobs write` 中，不在 MCP 暴露以节省上下文）。
 - `job_read` 支持 `stream: "stdout" | "stderr" | "both"`、`wait_until: "output" | "idle" | "exit"`（`output` 模式带 300ms 聚包，避免逐字唤醒；`wait_ms` 上限 60 秒）与 `match` 正则匹配唤醒；写明本次读取的字节范围与继续读取的 `offset` / `stderr_offset`。被环形缓冲丢弃的范围也会写明。
 - `job_list` 默认只列出当前 access key 正在运行的任务并将多行命令折叠为单行；`include_finished: true` 包含最近保留的已结束任务（默认上限 20，最高 100），`all: true` 列出该 Lane 在这台机器上的全部任务。
 
-**`read_file(machine, briefing, path, start_line?, end_line?, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**、**`edit_file(machine, briefing, path, old_text?, new_text?, edits?)`**、**`list_dir(machine, briefing, path?, max_depth?, include_hidden?)`**、**`grep_files(machine, briefing, pattern, path?, regex?, case_sensitive?, glob?, max_matches?)`**
+**`read_file(machine, briefing, path, start_line?, end_line?, offset?, limit?)`**、**`edit_file(machine, briefing, path, old_text?, new_text?, edits?, content?, overwrite?)`**、**`list_dir(machine, briefing, path?, max_depth?, include_hidden?)`**、**`grep(machine, briefing, pattern, path?, skill?, regex?, case_sensitive?, glob?, max_matches?)`**
 
-- 内联文件读取、写入、原子局部编辑、目录树与文本检索。`read_file` 默认读 20KB，支持按行号范围读取（输出带行号）或字节分页；PNG/JPEG/WebP/GIF 图片在 4MB 内直接以 MCP 原生 `ImageContent` 返回；其他二进制内容以 base64 返回。`edit_file` 支持单次 `old_text` / `new_text` 或 `edits` 批量原子替换并返回 unified diff。
+- 内联文件读取、编辑/写入、目录树与文本检索。
+- `read_file` 默认读 20KB，支持按行号范围读取（输出带行号）或字节分页；PNG/JPEG/WebP/GIF 图片在 4MB 内直接以 MCP 原生 `ImageContent` 返回；其他二进制内容以 base64 返回。
+- `edit_file` 支持单次 `old_text` / `new_text` 或 `edits` 批量原子替换并返回 unified diff；传 `content` 时自动创建父目录并原子写入整文件（默认不覆盖，`overwrite: true` 时替换）。
+- `grep` 统一搜索普通路径或 skill 目录内的文本文件（默认字面量不区分大小写，`regex: true` 使用 Go RE2 正则，支持 `glob` 文件名过滤，最多 500 条匹配，跳过二进制、超过 2MB 文件与 `.git` / `node_modules` 等噪音目录）。传 `skill` 时限定在 skill 目录内（调用 `skill.grep`，仅需 `expose_skills`）；不传 `skill` 时搜索文件系统路径（调用 `file.grep`，需要 `allow_exec`）。
 
 **`transfer(from_machine, from_briefing?, from_path, to_machine, to_briefing?, to_path, overwrite?)`**
 
@@ -439,7 +436,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 **与旧版本守护进程的兼容**
 
-`grep_skill`、目录读取和项目位置检查需要新版本的守护进程。守护进程会自动升级到 Server 的版本；升级完成之前，调用旧守护进程不支持的方法时，返回"这台机器的 Lanesh 版本较旧，会自动升级，请稍后重试"。
+新版本守护进程方法（如 `file.edit`、`file.list`、`file.grep`）与按 `hello.features` 协商的能力（如 `file.lines`、`job.read.wait`）需要对应版本的守护进程。守护进程会自动升级到 Server 的版本；升级完成之前，调用旧守护进程不支持的能力时，返回"这台机器的 Lanesh 版本较旧，会自动升级，请稍后重试"。
 
 ### 8.4 简报令牌（describe gating）
 
@@ -460,7 +457,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 **校验**
 
-- `read_skill`、`grep_skill`、`exec`、`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌，但涉及调用方本机（`X-Lanesh-Machine` / `?machine=` 标记的 `(you)`）时免校验本机令牌。`job_*` 操作已经存在的任务，不需要令牌。
+- `read_skill`、`exec`、`read_file`、`edit_file`、`list_dir`、`grep` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌，但涉及调用方本机（`X-Lanesh-Machine` / `?machine=` 标记的 `(you)`）时免校验本机令牌。`job_*` 操作已经存在的任务，不需要令牌。
 - Server 先用自己缓存的机器状态校验；不匹配时向机器获取一次最新简报再校验，以免因为 Server 的缓存落后而误判。
 - **令牌缺失、未知或早于保留历史**时：**不执行任何操作**，直接返回最新完整简报和当前令牌，形式如下。开头一行写明下一步动作：用哪个工具、哪个参数（`transfer` 是 `from_briefing` / `to_briefing`）、哪个令牌重试，并说明不需要再调用 `describe_machine`。Agent 阅读后重试一次即可：
 
@@ -476,7 +473,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
   ```
 
 - **持已知历史令牌、仅 skill 发生变动**时（在 `skill_history` 中匹配到令牌对应的旧版本）：
-  - 若本次调用显式指向的 skill（`read_skill`、`grep_skill` 或 `exec(skill=…)`）本身被修改、删除或优先级变更：**仍拦截不执行**，但只返回精简的变化 diff 与新令牌，不重传未变化的完整 skill 列表。
+  - 若本次调用显式指向的 skill（`read_skill`、`grep(skill=…)` 或 `exec(skill=…)`）本身被修改、删除或优先级变更：**仍拦截不执行**，但只返回精简的变化 diff 与新令牌，不重传未变化的完整 skill 列表。
   - 若为其他与变动 skill 无关的操作（普通 `exec`、文件读写编辑检索、`transfer` 或访问未变动的 skill）：**放行执行**，并在返回结果开头附带新令牌与变化 diff 提示，避免后台无关 skill 更新打断正在进行的工作或并行调用同时倾倒多份完整简报。
 
 - `transfer` 两端都需要简报时，在一次返回中给出两台机器的简报。
@@ -831,9 +828,9 @@ docs/                      # 设计、管理 API、发布流程
 ### 已实现能力
 
 - **核心链路**：Server（Lane、凭证、加入、WebSocket 控制通道）+ 守护进程（握手、心跳、重连）+ SQLite 持久化与迁移
-- **MCP 与 skill 体系**：`list_machines`、`describe_machine`、`find_skills`、`read_skill`、`grep_skill`，简报令牌与按会话认知计算的变化报告，结果预算与结束标记，SSE 心跳保活
-- **执行与文件传输**：`exec` 与后台任务管理、`read_file` / `write_file`、支持分段上传与 gzip 压缩的 `transfer`，macOS / Linux / Windows 三平台适配
-- **项目上下文**：`get_project` / `update_project`、位置实时检查（`path.inspect`）、Markdown 上下文与 20 条修订历史/恢复
+- **MCP 与 skill 体系**：`list_machines`、`describe_machine`、`find_skills`、`read_skill`、`grep`，非阻塞简报更新通知与精简 diff 拦截，结果与工具 Schema 上下文预算，SSE 心跳保活
+- **执行、文件与消费侧 CLI**：`exec` 与支持双流/条件等待/正则唤醒的 `job_read`、`read_file`（行范围 + 原生图片返回）、`edit_file`（局部替换 diff + 整文件写入）、`list_dir`、`grep`、支持分段上传/gzip/sha256 的 `transfer`，以及无状态消费侧 JSON API 与 `lanesh connect / exec / cp / read / write / edit / ls / grep / jobs / project` 客户端命令，macOS / Linux / Windows 三平台适配
+- **项目上下文**：`get_project` / `update_project`、位置实时检查（`path.inspect`，含软链接真实路径与短 Git commit）、Markdown 上下文与 20 条修订历史/恢复
 - **运维与分发**：后台服务管理、`doctor`、自动升级、npm 启动器、安装脚本、GoReleaser 与 GHCR 镜像、嵌入式 SvelteKit 管理界面
 
 ### 后续规划

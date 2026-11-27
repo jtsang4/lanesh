@@ -129,20 +129,36 @@ Cursor：添加到全局的 `~/.cursor/mcp.json`。Web 管理界面会为上述�
 | `describe_machine` | 查看某台机器的环境、权限、已安装的 skill，以及**简报令牌（briefing token）** |
 | `find_skills` | 可选的快速路径：按关键词跨机器检索 skill 名称和描述 |
 | `read_skill` | 读取 `SKILL.md` 及 skill 文件树、列出子目录，或读取一个或多个文件 |
-| `grep_skill` | 在所在机器上搜索 skill 的文本文件 |
 | `exec` | 执行命令；耗时较长的命令会自动转入后台任务继续运行 |
-| `job_read` / `job_write` / `job_kill` / `job_list` | 读取后台任务输出、写入 stdin、终止或列出后台任务 |
-| `read_file` / `write_file` | 内联读写小文件 |
-| `transfer` | 在两台机器之间流式传输文件或目录 |
-| `get_project` / `update_project` | 读取或更新项目：记录某项工作位于哪里，以及 Agent 需要了解什么 |
+| `job_read` / `job_kill` / `job_list` | 读取后台任务输出（支持双流、`wait_until`、正则 `match` 唤醒）、列出或终止后台任务 |
+| `read_file` | 按行范围或字节偏移读取文件；PNG/JPEG/WebP/GIF 图片直接以原生图像返回 |
+| `edit_file` | 唯一匹配局部编辑（支持单次或原子批量修改并返回 diff），或整文件写入（≤ 1 MiB） |
+| `list_dir` / `grep` | 紧凑目录树浏览，以及在文件系统路径或 skill 目录内进行文本/正则检索 |
+| `transfer` | 在两台机器之间流式传输文件或目录并返回已校验的 SHA-256 |
+| `get_project` / `update_project` | 读取或更新项目：实时位置探侦（软链接真实路径、Git 分支/短提交、worktree、`AGENTS.md`/`CLAUDE.md`）与 Markdown 说明 |
 
-**项目（Project）**记录某项工作在哪些机器的哪些路径上（可配置多个），以及写给 Agent 的自由格式 Markdown 说明：项目是什么、有哪些规则、当前进展到哪里。位置信息只是指引，不是限制。每次读取项目时，Lanesh 都会到对应机器上实时检查各个位置（路径是否存在、当前 Git 分支、是否为 worktree、是否包含 `AGENTS.md` 或 `CLAUDE.md`），避免机器侧的状态信息过时。你可以在 Web 管理界面中管理项目，也可以直接让 Agent 帮你维护。
+**项目（Project）**记录某项工作在哪些机器的哪些路径上（可配置多个），以及写给 Agent 的自由格式 Markdown 说明：项目是什么、有哪些规则、当前进展到哪里。位置信息只是指引，不是限制。每次读取项目时，Lanesh 都会到对应机器上实时检查各个位置（路径是否存在、软链接真实路径、当前 Git 分支与短提交哈希、是否为 worktree、是否包含 `AGENTS.md` 或 `CLAUDE.md`），避免机器侧的状态信息过时。你可以在 Web 管理界面、CLI 或直接让 Agent 维护项目。
 
 ![包含实时位置检查、Markdown 说明和修订历史的项目页面](docs/images/project-dark.png)
 
 工具返回的结果都是精简纯文本，并控制在 token 预算以内。凡是 Lanesh 省略的内容（过长输出、庞大的 skill 文件树、文件剩余部分）都会在原处标明并给出继续读取的方式；每条结果都以 `[lanesh] end of result` 结尾，方便 Agent 判断输出是否被客户端截断。
 
-每个操作具体机器的工具都需要携带该机器的简报令牌（由 `describe_machine` 返回的短字符串，形如 `build-box:k3f9q2ab`），用于确保 Agent 在操作之前先了解机器的环境与 skill。如果调用时缺少有效令牌（例如 Agent 忘记携带，或机器上的 skill 发生了变化），操作不会执行，而是直接返回该机器的最新简报与当前令牌，Agent 一次重试即可同步并继续。如果 skill 有变动，简报开头会列出自该 Agent 上一次获取简报以来的变更（新增、更新或移除的 skill），因此长会话能清楚知道需要重读哪些 skill，而新会话只需直接看到最新状态。
+每个操作具体机器的工具都需要携带该机器的简报令牌（由 `describe_machine` 返回的短字符串，形如 `build-box:k3f9q2ab`；`transfer` 涉及本机时可省略本机令牌）。缺少已知令牌时，操作不会执行，直接返回该机器的完整简报和当前令牌；当 Agent 持有已知历史令牌且后台仅发生无关 skill 变更时，调用会正常放行并在结果开头附带新令牌与精简变更提示，只有显式指向已变动 skill 的调用才会被以精简 diff 拦截。
+
+## 客户端 CLI
+
+使用同一个 access key，也可以直接在终端或脚本里操作 Lane 中的任意机器（适合本地脚本、快捷传包，或在 MCP 不可用时作为后备通道）：
+
+```sh
+lanesh connect https://lanesh.example.com/lanes/<lane-id> --key <access-key>
+lanesh machines
+lanesh exec devbox --cwd ~/repo -- go test ./...
+lanesh cp ./dist/app.pkg bytemac:~/Downloads/app.pkg --overwrite
+lanesh read devbox:~/repo/main.go --lines 1-60
+lanesh edit devbox:~/app/config.yaml --old "debug: false" --new "debug: true"
+lanesh ls devbox:~/repo && lanesh grep devbox:~/repo "TODO" --glob "*.go"
+lanesh project get storefront
+```
 
 ## 安装 CLI
 

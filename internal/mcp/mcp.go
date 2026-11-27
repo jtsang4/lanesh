@@ -169,35 +169,21 @@ func (t *Tools) register(s *mcp.Server) {
 	tool := func(name, desc string, ann *mcp.ToolAnnotations) *mcp.Tool {
 		return &mcp.Tool{Name: name, Description: desc, Annotations: ann}
 	}
-	add(s, tool("list_machines", "Machines in this lane: platform, online, permissions, skill count.", ro), t.listMachines)
-	add(s, tool("describe_machine", "A machine's environment, permissions and skills (name and short description), "+
-		"plus the briefing token every other call for it needs. The main way to choose a skill: review this list, then read_skill.", ro), t.describeMachine)
-	add(s, tool("find_skills", "Optional quick keyword search of skill names and descriptions on all machines. Not semantic; "+
-		"if a query or two finds nothing clear, use describe_machine instead of more queries. machine without query lists its skills.", ro), t.findSkills)
-	add(s, tool("read_skill", "Read a skill: no path gives SKILL.md and its file tree; path is a file (offset/limit) or a directory ending in \"/\"; "+
-		"paths reads several files.", ro), t.readSkill)
-	add(s, tool("grep_skill", "Search a skill's text files for a string (or regex). Returns file:line: text.", ro), t.grepSkill)
-	add(s, tool("get_project", "A project's context (what it is, its rules, where it stands) and its locations: "+
-		"the machines and paths where it lives, a guide rather than a limit. Without project, lists projects.", ro), t.getProject)
-	add(s, tool("update_project", "Create or change a project. Prefer old_text/new_text for edits; keep the context "+
-		"short and current, since the source itself is the full record.", &mcp.ToolAnnotations{DestructiveHint: ptr(false)}), t.updateProject)
-	add(s, tool("exec", "Run a shell command on a machine. Returns when done or after timeout_ms (default 30000); "+
-		"then it keeps running as a job (job_read, job_kill). With skill, cwd is relative to the skill directory. "+
-		"stdin is closed unless background.", &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)}), t.exec)
-	add(s, tool("job_read", "Read a job's output (stdout, stderr, or both). Supports wait_ms (max 60000), "+
-		"wait_until (output, idle, or exit), and match (Go regex).", ro), t.jobRead)
-	add(s, tool("job_write", "Write to a background job's stdin.", nil), t.jobWrite)
+	add(s, tool("list_machines", "List machines in this lane (platform, status, permissions, skill count).", ro), t.listMachines)
+	add(s, tool("describe_machine", "Get a machine's environment, skills, and briefing token (required by machine tools).", ro), t.describeMachine)
+	add(s, tool("find_skills", "Keyword search skills across machines, or list one machine's skills. Not semantic; use describe_machine when unsure.", ro), t.findSkills)
+	add(s, tool("read_skill", "Read a skill: omit path for SKILL.md + tree; path for a file or dir/; paths for multiple files.", ro), t.readSkill)
+	add(s, tool("get_project", "Get a project's live locations and Markdown context; omit project to list all.", ro), t.getProject)
+	add(s, tool("update_project", "Create or edit a project (prefer old_text/new_text for partial edits).", &mcp.ToolAnnotations{DestructiveHint: ptr(false)}), t.updateProject)
+	add(s, tool("exec", "Run a shell command on a machine; continues as a job after timeout_ms (default 30000).", &mcp.ToolAnnotations{DestructiveHint: ptr(true), OpenWorldHint: ptr(true)}), t.exec)
+	add(s, tool("job_read", "Read or wait for job output (stdout, stderr, or both).", ro), t.jobRead)
 	add(s, tool("job_kill", "Stop a job and its children.", rw), t.jobKill)
-	add(s, tool("job_list", "Running jobs on a machine started with your key (include_finished for recent completed jobs; all for every key).", ro), t.jobList)
-	add(s, tool("read_file", "Read a file on a machine (start_line/end_line or byte offset/limit; paths relative to home). "+
-		"Supported images (PNG/JPEG/WebP/GIF) are returned natively; other binaries as base64.", ro), t.readFile)
-	add(s, tool("write_file", "Write a file up to 1 MiB atomically; overwrite to replace.", rw), t.writeFile)
-	add(s, tool("edit_file", "Edit a UTF-8 text file by exact unique old_text replacement (single old_text/new_text, "+
-		"or edits array applied atomically). Returns a unified diff.", rw), t.editFile)
-	add(s, tool("list_dir", "List a directory on a machine as a compact file tree (skips .git, node_modules, etc.).", ro), t.listDir)
-	add(s, tool("grep_files", "Search text files under a path on a machine for a string (or regex). Returns file:line: text.", ro), t.grepFiles)
-	add(s, tool("transfer", "Copy a file or directory between machines. to_path is the full destination path, not its parent; "+
-		"overwrite to replace.", rw), t.transfer)
+	add(s, tool("job_list", "List running jobs on a machine (include_finished for recent completed).", ro), t.jobList)
+	add(s, tool("read_file", "Read a file (lines or byte range; PNG/JPEG/WebP/GIF returned as images).", ro), t.readFile)
+	add(s, tool("edit_file", "Edit a UTF-8 file (unique old_text/new_text or atomic edits, returning a diff), or write whole content (max 1 MiB).", rw), t.editFile)
+	add(s, tool("list_dir", "List a directory as a compact tree (skips .git, node_modules, etc.).", ro), t.listDir)
+	add(s, tool("grep", "Search text files under path (or inside skill) for a string or Go regex. Returns file:line: text.", ro), t.grep)
+	add(s, tool("transfer", "Copy a file or directory between machines (to_path is full destination path).", rw), t.transfer)
 }
 
 func ptr[T any](v T) *T { return &v }

@@ -256,6 +256,7 @@ type SkillGrepParams struct {
 	Path       string `json:"path,omitempty"`
 	Regex      bool   `json:"regex,omitempty"`
 	IgnoreCase bool   `json:"ignore_case,omitempty"`
+	Glob       string `json:"glob,omitempty"`
 	MaxMatches int    `json:"max_matches,omitempty"`
 }
 

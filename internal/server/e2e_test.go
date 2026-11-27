@@ -382,8 +382,8 @@ func TestEndToEnd(t *testing.T) {
 	if _, errText := call(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "path": "../../.lanesh/credentials.toml"}); errText == "" {
 		t.Fatal("path traversal must be rejected")
 	}
-	grep := mustCall(t, s, "grep_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "pattern": "PAYLOAD"})
-	mustContain(t, "grep_skill", grep, "1 match in 1 of 2 files", "scripts/data.txt:1: payload-deploy")
+	grep := mustCall(t, s, "grep", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy", "pattern": "PAYLOAD", "glob": "*.txt"})
+	mustContain(t, "grep skill", grep, "1 match in 1 of 1 file", "scripts/data.txt:1: payload-deploy")
 
 	// Commands run in the skill directory when skill is set.
 	ex := mustCall(t, s, "exec", map[string]any{
@@ -418,8 +418,8 @@ func TestEndToEnd(t *testing.T) {
 	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID})
 	mustContain(t, "job_read", read, "started", "end of stdout; the job has finished")
 
-	// Files, editing, directory listing, grep, image reading, and transfers.
-	mustContain(t, "write_file", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha\nline two\nline three\n", "create_dirs": true}), "wrote 37 B")
+	// Files, editing (create + surgical edits + overwrite), directory listing, grep, image reading, and transfers.
+	mustContain(t, "edit_file create", mustCall(t, s, "edit_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha\nline two\nline three\n"}), "wrote 37 B")
 	rf := mustCall(t, s, "read_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "~/out/report.txt"})
 	mustContain(t, "read_file", rf, "(37 B)\nhello from alpha\nline two\nline three\n[lanesh] end ")
 	rfLines := mustCall(t, s, "read_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "~/out/report.txt", "start_line": 2, "end_line": 3})
@@ -434,8 +434,8 @@ func TestEndToEnd(t *testing.T) {
 	mustContain(t, "edit_file", ed, "2 edits applied", "[lanesh] begin diff", "-line two", "+line TWO", "+line THREE")
 	ld := mustCall(t, s, "list_dir", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out"})
 	mustContain(t, "list_dir", ld, "report.txt")
-	gf := mustCall(t, s, "grep_files", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out", "pattern": "THREE", "glob": "*.txt"})
-	mustContain(t, "grep_files", gf, "1 match in 1 of 1 file", "report.txt:3: line THREE")
+	gf := mustCall(t, s, "grep", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out", "pattern": "THREE", "glob": "*.txt"})
+	mustContain(t, "grep files", gf, "1 match in 1 of 1 file", "report.txt:3: line THREE")
 
 	// Native image reading returns ImageContent alongside the framed text header.
 	var pngBuf bytes.Buffer
@@ -470,8 +470,8 @@ func TestEndToEnd(t *testing.T) {
 	_ = os.Remove(imgPath)
 
 	// Reset report.txt to 16 B before transfer assertions below.
-	mustContain(t, "write_file overwrite", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "overwrite": true}), "wrote 16 B")
-	if _, errText := call(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "x"}); !strings.Contains(errText, "exists") {
+	mustContain(t, "edit_file overwrite", mustCall(t, s, "edit_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "overwrite": true}), "wrote 16 B")
+	if _, errText := call(t, s, "edit_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "x"}); !strings.Contains(errText, "exists") {
 		t.Fatalf("overwrite protection: %q", errText)
 	}
 	tr := mustCall(t, s, "transfer", map[string]any{

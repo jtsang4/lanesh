@@ -61,7 +61,7 @@ func machineLine(c caller, m Machine) string {
 
 // DescribeInput selects a machine.
 type DescribeInput struct {
-	Machine string `json:"machine" jsonschema:"machine name"`
+	Machine string `json:"machine"`
 }
 
 func (t *Tools) describeMachine(ctx context.Context, c caller, in DescribeInput) (*text, error) {
@@ -85,8 +85,8 @@ func (t *Tools) describeMachine(ctx context.Context, c caller, in DescribeInput)
 
 // FindInput searches skills.
 type FindInput struct {
-	Query   string `json:"query,omitempty" jsonschema:"keywords"`
-	Machine string `json:"machine,omitempty" jsonschema:"only this machine"`
+	Query   string `json:"query,omitempty"`
+	Machine string `json:"machine,omitempty" jsonschema:"limit to one machine"`
 }
 
 func (t *Tools) findSkills(ctx context.Context, c caller, in FindInput) (*text, error) {
@@ -186,13 +186,13 @@ func machineList(sm *skillMatch) string {
 
 // ReadSkillInput selects what to read from a skill.
 type ReadSkillInput struct {
-	Machine  string   `json:"machine" jsonschema:"machine name"`
-	Briefing string   `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Skill    string   `json:"skill" jsonschema:"skill name"`
-	Path     string   `json:"path,omitempty" jsonschema:"file, or directory ending in /, relative to the skill"`
-	Paths    []string `json:"paths,omitempty" jsonschema:"several whole files at once (no offset/limit)"`
-	Offset   int64    `json:"offset,omitempty" jsonschema:"byte offset in path"`
-	Limit    int64    `json:"limit,omitempty" jsonschema:"bytes to read from path (default 20480)"`
+	Machine  string   `json:"machine"`
+	Briefing string   `json:"briefing" jsonschema:"briefing token"`
+	Skill    string   `json:"skill"`
+	Path     string   `json:"path,omitempty" jsonschema:"relative file or dir/"`
+	Paths    []string `json:"paths,omitempty" jsonschema:"whole files (no offset/limit)"`
+	Offset   int64    `json:"offset,omitempty" jsonschema:"byte offset"`
+	Limit    int64    `json:"limit,omitempty" jsonschema:"max bytes (default 20480)"`
 }
 
 // maxPaths caps read_skill paths per call.
@@ -241,12 +241,12 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 			where = res.Path + "/"
 		}
 		out.line("[lanesh] skill %q on %q, directory %s (skill directory %s)", res.Skill, m.Name, where, res.Dir)
-		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines, "grep_skill")
+		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines, "grep")
 	case in.Path == "":
 		out.line("[lanesh] skill %q on %q: SKILL.md and its files (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
 		out.line("Files:")
-		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines, "grep_skill")
+		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines, "grep")
 	default:
 		out.line("[lanesh] skill %q on %q (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
@@ -334,79 +334,20 @@ func writeTree(out *text, root string, entries []protocol.FileEntry, truncated b
 	}
 }
 
-// --- grep_skill ---
-
-// GrepInput searches a skill.
-type GrepInput struct {
-	Machine       string `json:"machine" jsonschema:"machine name"`
-	Briefing      string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Skill         string `json:"skill" jsonschema:"skill name"`
-	Pattern       string `json:"pattern" jsonschema:"text to find"`
-	Path          string `json:"path,omitempty" jsonschema:"only this file or directory"`
-	Regex         bool   `json:"regex,omitempty" jsonschema:"pattern is a Go regular expression"`
-	CaseSensitive bool   `json:"case_sensitive,omitempty"`
-	MaxMatches    int    `json:"max_matches,omitempty" jsonschema:"default 100"`
-}
-
-func (t *Tools) grepSkill(ctx context.Context, c caller, in GrepInput) (*text, error) {
-	m, notice, err := t.briefed(ctx, c, "grep_skill", "briefing", in.Machine, in.Briefing, in.Skill)
-	if err != nil {
-		return nil, err
-	}
-	if err := requirePolicy(m, false); err != nil {
-		return nil, err
-	}
-	if in.Skill == "" || in.Pattern == "" {
-		return nil, errors.New("skill and pattern are required")
-	}
-	var res protocol.SkillGrepResult
-	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodSkillGrep, protocol.SkillGrepParams{
-		Skill: in.Skill, Pattern: in.Pattern, Path: in.Path, Regex: in.Regex, IgnoreCase: !in.CaseSensitive, MaxMatches: in.MaxMatches,
-	}, &res)
-	if err != nil {
-		return nil, protoErr(err)
-	}
-	var out text
-	if notice != "" {
-		out.raw(notice)
-	}
-	out.line("[lanesh] %q in skill %q on %q: %s in %d of %s", in.Pattern, res.Skill, m.Name,
-		plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
-	shown := 0
-	for _, g := range res.Matches {
-		line := fmt.Sprintf("%s:%d: %s", g.Path, g.Line, g.Text)
-		if out.tokens()+estimateTokens(line) > resultBudget {
-			break
-		}
-		out.raw(line)
-		shown++
-	}
-	if rest := len(res.Matches) - shown; rest > 0 {
-		out.line("[lanesh] %d more matches not shown (to fit the budget); narrow pattern or path.", rest)
-	}
-	if res.Truncated {
-		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches (up to 500).", len(res.Matches))
-	}
-	if len(res.Skipped) > 0 {
-		out.line("[lanesh] not searched: %s", strings.Join(res.Skipped, ", "))
-	}
-	return &out, nil
-}
-
 // --- exec ---
 
 // ExecInput runs a command.
 type ExecInput struct {
-	Machine    string            `json:"machine" jsonschema:"machine name"`
-	Briefing   string            `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Command    string            `json:"command" jsonschema:"in the syntax of the machine's shell"`
-	Cwd        string            `json:"cwd,omitempty" jsonschema:"relative to the skill directory with skill, else to home"`
-	Skill      string            `json:"skill,omitempty" jsonschema:"run in this skill's directory"`
-	Shell      string            `json:"shell,omitempty" jsonschema:"instead of the default, e.g. bash, pwsh, cmd"`
+	Machine    string            `json:"machine"`
+	Briefing   string            `json:"briefing" jsonschema:"briefing token"`
+	Command    string            `json:"command"`
+	Cwd        string            `json:"cwd,omitempty" jsonschema:"working dir (relative to skill or home)"`
+	Skill      string            `json:"skill,omitempty" jsonschema:"run in this skill's dir"`
+	Shell      string            `json:"shell,omitempty" jsonschema:"override shell (bash, pwsh, cmd)"`
 	Env        map[string]string `json:"env,omitempty"`
 	Stdin      string            `json:"stdin,omitempty"`
-	TimeoutMS  int               `json:"timeout_ms,omitempty" jsonschema:"wait this long (default 30000, max 600000); the command keeps running after"`
-	Background bool              `json:"background,omitempty" jsonschema:"return at once; stdin stays open for job_write"`
+	TimeoutMS  int               `json:"timeout_ms,omitempty" jsonschema:"wait ms (default 30000, max 600000)"`
+	Background bool              `json:"background,omitempty" jsonschema:"return job_id immediately"`
 }
 
 func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error) {
@@ -485,16 +426,16 @@ func writeStream(out *text, name, data string, total int64) {
 
 // JobReadInput reads job output.
 type JobReadInput struct {
-	Machine      string `json:"machine" jsonschema:"machine name"`
+	Machine      string `json:"machine"`
 	JobID        string `json:"job_id"`
 	Stream       string `json:"stream,omitempty" jsonschema:"stdout (default), stderr, or both"`
-	Offset       int64  `json:"offset,omitempty" jsonschema:"byte offset (stdout when stream is both)"`
-	StderrOffset int64  `json:"stderr_offset,omitempty" jsonschema:"stderr byte offset when stream is both"`
-	Limit        int    `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
-	WaitMS       int    `json:"wait_ms,omitempty" jsonschema:"wait up to this long (max 60000)"`
-	WaitUntil    string `json:"wait_until,omitempty" jsonschema:"output (default, with brief coalescing), idle, or exit"`
-	IdleMS       int    `json:"idle_ms,omitempty" jsonschema:"quiet duration for wait_until=idle (default 1500, max 15000)"`
-	Match        string `json:"match,omitempty" jsonschema:"Go regex; wake as soon as new output matches"`
+	Offset       int64  `json:"offset,omitempty" jsonschema:"byte offset (stdout if both)"`
+	StderrOffset int64  `json:"stderr_offset,omitempty" jsonschema:"stderr byte offset (if both)"`
+	Limit        int    `json:"limit,omitempty" jsonschema:"max bytes (default 20480)"`
+	WaitMS       int    `json:"wait_ms,omitempty" jsonschema:"max wait ms (cap 60000)"`
+	WaitUntil    string `json:"wait_until,omitempty" jsonschema:"output (default), idle, or exit"`
+	IdleMS       int    `json:"idle_ms,omitempty" jsonschema:"quiet ms for idle (default 1500)"`
+	Match        string `json:"match,omitempty" jsonschema:"Go regex to wake on"`
 }
 
 func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, error) {
@@ -580,39 +521,11 @@ func (t *Tools) jobRead(ctx context.Context, c caller, in JobReadInput) (*text, 
 	return &out, nil
 }
 
-// JobWriteInput writes to a job's stdin.
-type JobWriteInput struct {
-	Machine    string `json:"machine" jsonschema:"machine name"`
-	JobID      string `json:"job_id"`
-	Data       string `json:"data,omitempty" jsonschema:"include a trailing newline for line-based programs"`
-	CloseStdin bool   `json:"close_stdin,omitempty"`
-}
-
-func (t *Tools) jobWrite(ctx context.Context, c caller, in JobWriteInput) (*text, error) {
-	m, err := t.online(ctx, c, in.Machine)
-	if err != nil {
-		return nil, err
-	}
-	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodJobWrite,
-		protocol.JobWriteParams{JobID: in.JobID, Data: in.Data, CloseStdin: in.CloseStdin}, nil)
-	t.audit(ctx, c, "job.write", m, map[string]any{"job_id": in.JobID, "bytes": len(in.Data), "close_stdin": in.CloseStdin}, err)
-	if err != nil {
-		return nil, protoErr(err)
-	}
-	var out text
-	msg := fmt.Sprintf("[lanesh] wrote %s to job %s", size(int64(len(in.Data))), in.JobID)
-	if in.CloseStdin {
-		msg += " and closed its stdin"
-	}
-	out.line("%s.", msg)
-	return &out, nil
-}
-
 // JobKillInput stops a job.
 type JobKillInput struct {
-	Machine string `json:"machine" jsonschema:"machine name"`
+	Machine string `json:"machine"`
 	JobID   string `json:"job_id"`
-	Signal  string `json:"signal,omitempty" jsonschema:"TERM, INT or KILL (default)"`
+	Signal  string `json:"signal,omitempty" jsonschema:"TERM, INT, or KILL (default)"`
 }
 
 func (t *Tools) jobKill(ctx context.Context, c caller, in JobKillInput) (*text, error) {
@@ -633,10 +546,10 @@ func (t *Tools) jobKill(ctx context.Context, c caller, in JobKillInput) (*text, 
 
 // JobListInput lists jobs.
 type JobListInput struct {
-	Machine         string `json:"machine" jsonschema:"machine name"`
-	All             bool   `json:"all,omitempty" jsonschema:"include jobs of other access keys"`
-	IncludeFinished bool   `json:"include_finished,omitempty" jsonschema:"include recently finished jobs (default: running only)"`
-	Limit           int    `json:"limit,omitempty" jsonschema:"max jobs to list (default 20, max 100)"`
+	Machine         string `json:"machine"`
+	All             bool   `json:"all,omitempty" jsonschema:"all access keys"`
+	IncludeFinished bool   `json:"include_finished,omitempty" jsonschema:"include completed"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"default 20, max 100"`
 }
 
 func (t *Tools) jobList(ctx context.Context, c caller, in JobListInput) (*text, error) {
@@ -696,14 +609,13 @@ func (t *Tools) jobList(ctx context.Context, c caller, in JobListInput) (*text, 
 
 // ReadFileInput reads a file.
 type ReadFileInput struct {
-	Machine   string `json:"machine" jsonschema:"machine name"`
-	Briefing  string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Path      string `json:"path" jsonschema:"absolute, or relative to home"`
-	StartLine int    `json:"start_line,omitempty" jsonschema:"1-based first line to read (cannot be combined with offset)"`
-	EndLine   int    `json:"end_line,omitempty" jsonschema:"1-based last line to read (inclusive)"`
+	Machine   string `json:"machine"`
+	Briefing  string `json:"briefing" jsonschema:"briefing token"`
+	Path      string `json:"path" jsonschema:"abs or home-relative"`
+	StartLine int    `json:"start_line,omitempty" jsonschema:"1-based start line"`
+	EndLine   int    `json:"end_line,omitempty" jsonschema:"1-based end line (inclusive)"`
 	Offset    int64  `json:"offset,omitempty" jsonschema:"byte offset"`
-	Limit     int64  `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
-	Encoding  string `json:"encoding,omitempty" jsonschema:"base64 to force base64"`
+	Limit     int64  `json:"limit,omitempty" jsonschema:"max bytes (default 20480)"`
 }
 
 func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text, error) {
@@ -725,7 +637,7 @@ func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text
 	var res protocol.FileReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileRead,
 		protocol.FileReadParams{
-			Path: in.Path, Offset: in.Offset, Limit: limit, Encoding: in.Encoding,
+			Path: in.Path, Offset: in.Offset, Limit: limit,
 			StartLine: in.StartLine, EndLine: in.EndLine,
 		}, &res)
 	t.audit(ctx, c, "file.read", m, map[string]any{"path": in.Path, "bytes": len(res.Content)}, err)
@@ -736,7 +648,7 @@ func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text
 	if notice != "" {
 		out.raw(notice)
 	}
-	if res.MIMEType != "" && in.Encoding != protocol.EncodingBase64 {
+	if res.MIMEType != "" {
 		if res.Truncated {
 			out.line("[lanesh] image %s on %q is %s (%s), above the %s inline image limit; copy it with transfer if you need it.",
 				res.Path, m.Name, size(res.Size), res.MIMEType, size(files.MaxImageInline))
@@ -789,50 +701,16 @@ func writeFileLines(out *text, res protocol.FileReadResult) {
 	}
 }
 
-// WriteFileInput writes a file.
-type WriteFileInput struct {
-	Machine    string `json:"machine" jsonschema:"machine name"`
-	Briefing   string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Path       string `json:"path" jsonschema:"absolute, or relative to home"`
-	Content    string `json:"content"`
-	Encoding   string `json:"encoding,omitempty" jsonschema:"utf-8 (default) or base64"`
-	Overwrite  bool   `json:"overwrite,omitempty"`
-	CreateDirs bool   `json:"create_dirs,omitempty"`
-	Mode       uint32 `json:"mode,omitempty" jsonschema:"Unix permissions as decimal, e.g. 493 for 0755"`
-}
-
-func (t *Tools) writeFile(ctx context.Context, c caller, in WriteFileInput) (*text, error) {
-	m, notice, err := t.briefed(ctx, c, "write_file", "briefing", in.Machine, in.Briefing, "")
-	if err != nil {
-		return nil, err
-	}
-	if err := requirePolicy(m, true); err != nil {
-		return nil, err
-	}
-	var res protocol.FileWriteResult
-	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileWrite, protocol.FileWriteParams{
-		Path: in.Path, Content: in.Content, Encoding: in.Encoding, Overwrite: in.Overwrite, CreateDirs: in.CreateDirs, Mode: in.Mode,
-	}, &res)
-	t.audit(ctx, c, "file.write", m, map[string]any{"path": in.Path, "bytes": res.Size, "overwrite": in.Overwrite}, err)
-	if err != nil {
-		return nil, protoErr(err)
-	}
-	var out text
-	if notice != "" {
-		out.raw(notice)
-	}
-	out.line("[lanesh] wrote %s to %s on %q.", size(res.Size), res.Path, m.Name)
-	return &out, nil
-}
-
-// EditFileInput replaces unique text snippets in a UTF-8 file.
+// EditFileInput edits a UTF-8 file by unique replacement(s) or writes whole content.
 type EditFileInput struct {
-	Machine  string                `json:"machine" jsonschema:"machine name"`
-	Briefing string                `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Path     string                `json:"path" jsonschema:"absolute, or relative to home"`
-	OldText  string                `json:"old_text,omitempty" jsonschema:"text to replace; must occur exactly once"`
-	NewText  string                `json:"new_text,omitempty" jsonschema:"replacement for old_text"`
-	Edits    []protocol.FileEditOp `json:"edits,omitempty" jsonschema:"multiple {old_text, new_text} edits applied atomically in order"`
+	Machine   string                `json:"machine"`
+	Briefing  string                `json:"briefing" jsonschema:"briefing token"`
+	Path      string                `json:"path" jsonschema:"abs or home-relative"`
+	OldText   string                `json:"old_text,omitempty" jsonschema:"unique text to replace"`
+	NewText   string                `json:"new_text,omitempty" jsonschema:"replacement"`
+	Edits     []protocol.FileEditOp `json:"edits,omitempty" jsonschema:"atomic [{old_text, new_text}]"`
+	Content   string                `json:"content,omitempty" jsonschema:"write full file (creates dirs)"`
+	Overwrite bool                  `json:"overwrite,omitempty" jsonschema:"with content, replace existing"`
 }
 
 func (t *Tools) editFile(ctx context.Context, c caller, in EditFileInput) (*text, error) {
@@ -843,13 +721,36 @@ func (t *Tools) editFile(ctx context.Context, c caller, in EditFileInput) (*text
 	if err := requirePolicy(m, true); err != nil {
 		return nil, err
 	}
+	hasEdits := len(in.Edits) > 0 || in.OldText != "" || in.NewText != ""
+	if in.Content != "" || (in.Overwrite && !hasEdits) {
+		if hasEdits {
+			return nil, errors.New("use content, or old_text/new_text/edits, not both")
+		}
+		var res protocol.FileWriteResult
+		err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileWrite, protocol.FileWriteParams{
+			Path: in.Path, Content: in.Content, Overwrite: in.Overwrite, CreateDirs: true,
+		}, &res)
+		t.audit(ctx, c, "file.write", m, map[string]any{"path": in.Path, "bytes": res.Size, "overwrite": in.Overwrite}, err)
+		if err != nil {
+			return nil, protoErr(err)
+		}
+		var out text
+		if notice != "" {
+			out.raw(notice)
+		}
+		out.line("[lanesh] wrote %s to %s on %q.", size(res.Size), res.Path, m.Name)
+		return &out, nil
+	}
+	if in.Overwrite {
+		return nil, errors.New("overwrite is only used with content")
+	}
 	if len(in.Edits) > 0 && (in.OldText != "" || in.NewText != "") {
 		return nil, errors.New("use old_text/new_text, or edits, not both")
 	}
 	ops := in.Edits
 	if len(ops) == 0 {
 		if in.OldText == "" {
-			return nil, errors.New("give old_text/new_text or edits")
+			return nil, errors.New("give old_text/new_text, edits, or content")
 		}
 		ops = []protocol.FileEditOp{{OldText: in.OldText, NewText: in.NewText}}
 	}
@@ -877,11 +778,11 @@ func (t *Tools) editFile(ctx context.Context, c caller, in EditFileInput) (*text
 
 // ListDirInput lists a directory tree.
 type ListDirInput struct {
-	Machine       string `json:"machine" jsonschema:"machine name"`
-	Briefing      string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Path          string `json:"path,omitempty" jsonschema:"directory path (default: home)"`
-	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"directory depth (default 4, max 16)"`
-	IncludeHidden bool   `json:"include_hidden,omitempty" jsonschema:"include dotfiles and dotdirs"`
+	Machine       string `json:"machine"`
+	Briefing      string `json:"briefing" jsonschema:"briefing token"`
+	Path          string `json:"path,omitempty" jsonschema:"default: home"`
+	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"default 4, max 16"`
+	IncludeHidden bool   `json:"include_hidden,omitempty"`
 }
 
 func (t *Tools) listDir(ctx context.Context, c caller, in ListDirInput) (*text, error) {
@@ -904,50 +805,80 @@ func (t *Tools) listDir(ctx context.Context, c caller, in ListDirInput) (*text, 
 		out.raw(notice)
 	}
 	out.line("[lanesh] directory %s on %q:", res.Path, m.Name)
-	writeTree(&out, "", res.Entries, res.Truncated, maxTreeLines, "grep_files")
+	writeTree(&out, "", res.Entries, res.Truncated, maxTreeLines, "grep")
 	return &out, nil
 }
 
-// GrepFilesInput searches text files under a path.
-type GrepFilesInput struct {
-	Machine       string `json:"machine" jsonschema:"machine name"`
-	Briefing      string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Pattern       string `json:"pattern" jsonschema:"text to find"`
-	Path          string `json:"path,omitempty" jsonschema:"file or directory (default: home)"`
-	Regex         bool   `json:"regex,omitempty" jsonschema:"pattern is a Go regular expression"`
+// GrepInput searches text files under a path or inside a skill.
+type GrepInput struct {
+	Machine       string `json:"machine"`
+	Briefing      string `json:"briefing" jsonschema:"briefing token"`
+	Pattern       string `json:"pattern"`
+	Path          string `json:"path,omitempty" jsonschema:"file/dir (relative to skill or home)"`
+	Skill         string `json:"skill,omitempty" jsonschema:"search inside this skill"`
+	Regex         bool   `json:"regex,omitempty" jsonschema:"Go regex"`
 	CaseSensitive bool   `json:"case_sensitive,omitempty"`
-	Glob          string `json:"glob,omitempty" jsonschema:"filename glob filter, e.g. *.go or *.md"`
+	Glob          string `json:"glob,omitempty" jsonschema:"filename glob, e.g. *.go"`
 	MaxMatches    int    `json:"max_matches,omitempty" jsonschema:"default 100, max 500"`
 }
 
-func (t *Tools) grepFiles(ctx context.Context, c caller, in GrepFilesInput) (*text, error) {
-	m, notice, err := t.briefed(ctx, c, "grep_files", "briefing", in.Machine, in.Briefing, "")
+func (t *Tools) grep(ctx context.Context, c caller, in GrepInput) (*text, error) {
+	m, notice, err := t.briefed(ctx, c, "grep", "briefing", in.Machine, in.Briefing, in.Skill)
 	if err != nil {
-		return nil, err
-	}
-	if err := requirePolicy(m, true); err != nil {
 		return nil, err
 	}
 	if in.Pattern == "" {
 		return nil, errors.New("pattern is required")
 	}
-	var res protocol.FileGrepResult
-	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileGrep, protocol.FileGrepParams{
-		Path: in.Path, Pattern: in.Pattern, Regex: in.Regex, IgnoreCase: !in.CaseSensitive,
-		Glob: in.Glob, MaxMatches: in.MaxMatches,
-	}, &res)
-	t.audit(ctx, c, "file.grep", m, map[string]any{"path": in.Path, "matches": len(res.Matches)}, err)
-	if err != nil {
-		return nil, protoErr(err)
+	var (
+		header        string
+		matches       []protocol.GrepMatch
+		filesMatched  int
+		filesSearched int
+		truncated     bool
+		skipped       []string
+	)
+	if in.Skill != "" {
+		if err := requirePolicy(m, false); err != nil {
+			return nil, err
+		}
+		var res protocol.SkillGrepResult
+		err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodSkillGrep, protocol.SkillGrepParams{
+			Skill: in.Skill, Pattern: in.Pattern, Path: in.Path, Regex: in.Regex,
+			IgnoreCase: !in.CaseSensitive, Glob: in.Glob, MaxMatches: in.MaxMatches,
+		}, &res)
+		if err != nil {
+			return nil, protoErr(err)
+		}
+		header = fmt.Sprintf("[lanesh] %q in skill %q on %q: %s in %d of %s", in.Pattern, res.Skill, m.Name,
+			plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
+		matches, filesMatched, filesSearched, truncated, skipped = res.Matches, res.FilesMatched, res.FilesSearched, res.Truncated, res.Skipped
+	} else {
+		if err := requirePolicy(m, true); err != nil {
+			return nil, err
+		}
+		var res protocol.FileGrepResult
+		err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileGrep, protocol.FileGrepParams{
+			Path: in.Path, Pattern: in.Pattern, Regex: in.Regex, IgnoreCase: !in.CaseSensitive,
+			Glob: in.Glob, MaxMatches: in.MaxMatches,
+		}, &res)
+		t.audit(ctx, c, "file.grep", m, map[string]any{"path": in.Path, "matches": len(res.Matches)}, err)
+		if err != nil {
+			return nil, protoErr(err)
+		}
+		header = fmt.Sprintf("[lanesh] %q in %s on %q: %s in %d of %s", in.Pattern, res.Path, m.Name,
+			plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
+		matches, filesMatched, filesSearched, truncated, skipped = res.Matches, res.FilesMatched, res.FilesSearched, res.Truncated, res.Skipped
 	}
+	_, _ = filesMatched, filesSearched
+
 	var out text
 	if notice != "" {
 		out.raw(notice)
 	}
-	out.line("[lanesh] %q in %s on %q: %s in %d of %s", in.Pattern, res.Path, m.Name,
-		plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
+	out.raw(header)
 	shown := 0
-	for _, g := range res.Matches {
+	for _, g := range matches {
 		line := fmt.Sprintf("%s:%d: %s", g.Path, g.Line, g.Text)
 		if out.tokens()+estimateTokens(line) > resultBudget {
 			break
@@ -955,14 +886,14 @@ func (t *Tools) grepFiles(ctx context.Context, c caller, in GrepFilesInput) (*te
 		out.raw(line)
 		shown++
 	}
-	if rest := len(res.Matches) - shown; rest > 0 {
+	if rest := len(matches) - shown; rest > 0 {
 		out.line("[lanesh] %d more matches not shown (to fit the budget); narrow pattern or path.", rest)
 	}
-	if res.Truncated {
-		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches (up to 500).", len(res.Matches))
+	if truncated {
+		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches (up to 500).", len(matches))
 	}
-	if len(res.Skipped) > 0 {
-		out.line("[lanesh] not searched: %s", strings.Join(res.Skipped, ", "))
+	if len(skipped) > 0 {
+		out.line("[lanesh] not searched: %s", strings.Join(skipped, ", "))
 	}
 	return &out, nil
 }
@@ -970,11 +901,11 @@ func (t *Tools) grepFiles(ctx context.Context, c caller, in GrepFilesInput) (*te
 // TransferInput copies between machines.
 type TransferInput struct {
 	FromMachine  string `json:"from_machine"`
-	FromBriefing string `json:"from_briefing,omitempty" jsonschema:"briefing token of from_machine (optional for your own machine)"`
-	FromPath     string `json:"from_path" jsonschema:"file or directory"`
+	FromBriefing string `json:"from_briefing,omitempty" jsonschema:"optional for (you)"`
+	FromPath     string `json:"from_path"`
 	ToMachine    string `json:"to_machine"`
-	ToBriefing   string `json:"to_briefing,omitempty" jsonschema:"briefing token of to_machine (optional for your own machine)"`
-	ToPath       string `json:"to_path" jsonschema:"full destination path"`
+	ToBriefing   string `json:"to_briefing,omitempty" jsonschema:"optional for (you)"`
+	ToPath       string `json:"to_path"`
 	Overwrite    bool   `json:"overwrite,omitempty"`
 }
 

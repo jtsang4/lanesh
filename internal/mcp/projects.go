@@ -42,7 +42,7 @@ type Projects interface {
 
 // GetProjectInput selects a project.
 type GetProjectInput struct {
-	Project string `json:"project,omitempty" jsonschema:"project name; omit to list projects"`
+	Project string `json:"project,omitempty" jsonschema:"name; omit to list"`
 }
 
 func (t *Tools) getProject(ctx context.Context, c caller, in GetProjectInput) (*text, error) {
@@ -190,13 +190,13 @@ type LocationInput struct {
 
 // UpdateProjectInput creates or changes a project.
 type UpdateProjectInput struct {
-	Project         string          `json:"project" jsonschema:"project name"`
-	Create          bool            `json:"create,omitempty" jsonschema:"create it (fails if it exists)"`
+	Project         string          `json:"project"`
+	Create          bool            `json:"create,omitempty" jsonschema:"create new"`
 	Rename          string          `json:"rename,omitempty"`
-	OldText         string          `json:"old_text,omitempty" jsonschema:"context text to replace; must occur exactly once"`
-	NewText         string          `json:"new_text,omitempty" jsonschema:"replacement for old_text; without old_text it is appended"`
-	Context         string          `json:"context,omitempty" jsonschema:"the whole context (Markdown); replacing it needs revision"`
-	Revision        int             `json:"revision,omitempty" jsonschema:"revision you read; fails if it changed since"`
+	OldText         string          `json:"old_text,omitempty" jsonschema:"unique text to replace"`
+	NewText         string          `json:"new_text,omitempty" jsonschema:"replacement (or append if no old_text)"`
+	Context         string          `json:"context,omitempty" jsonschema:"full Markdown (needs revision)"`
+	Revision        int             `json:"revision,omitempty" jsonschema:"expected revision"`
 	AddLocations    []LocationInput `json:"add_locations,omitempty"`
 	RemoveLocations []LocationInput `json:"remove_locations,omitempty"`
 }

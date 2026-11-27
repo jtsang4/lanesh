@@ -43,6 +43,11 @@ func Grep(idx protocol.SkillIndex, p protocol.SkillGrepParams) (protocol.SkillGr
 	if err != nil {
 		return protocol.SkillGrepResult{}, fmt.Errorf("invalid pattern: %w", err)
 	}
+	if p.Glob != "" {
+		if _, err := filepath.Match(p.Glob, "x"); err != nil {
+			return protocol.SkillGrepResult{}, fmt.Errorf("invalid glob %q: %w", p.Glob, err)
+		}
+	}
 	limit := p.MaxMatches
 	if limit <= 0 {
 		limit = DefaultGrepMatches
@@ -76,6 +81,13 @@ func Grep(idx protocol.SkillIndex, p protocol.SkillGrepParams) (protocol.SkillGr
 		}
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
+		if p.Glob != "" {
+			baseMatch, _ := filepath.Match(p.Glob, filepath.Base(rel))
+			relMatch, _ := filepath.Match(p.Glob, rel)
+			if !baseMatch && !relMatch {
+				return nil
+			}
+		}
 		info, err := d.Info()
 		if err != nil || !info.Mode().IsRegular() {
 			return nil
