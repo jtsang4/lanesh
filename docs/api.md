@@ -78,7 +78,7 @@ Each entry has `id`, `time`, `lane_id`, `actor` (a key ID, a machine ID or `admi
 | `exec` | An agent starts a command (`command`, `cwd`, `skill`, `job_id`, `status`, `exit_code`) |
 | `job.exited` | A command finishes (`job_id`, `command`, `exit_code`, `duration_ms`) |
 | `job.write`, `job.kill` | An agent writes to (`job_id`, `bytes`, `close_stdin`) or stops (`job_id`, `signal`) a job |
-| `file.read`, `file.write` | Inline file operations (`path`, `bytes`) |
+| `file.read`, `file.write`, `file.edit`, `file.list`, `file.grep` | Inline file operations (`path`, `bytes`, `edits`, `entries`, `matches`) |
 | `transfer` | A transfer between machines (`from_path`, `to_machine`, `to_path`, `bytes`, `files`) |
 | `machine.join`, `machine.leave`, `machine.remove` | Membership changes |
 | `key.create`, `key.revoke`, `lane.create`, `lane.delete` | Administrative changes |

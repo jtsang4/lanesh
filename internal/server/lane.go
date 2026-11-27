@@ -33,6 +33,7 @@ type MachineView struct {
 	SkillCount  int                  `json:"skill_count"`
 	SkillsHash  string               `json:"skills_hash"`
 	Environment protocol.Environment `json:"environment"`
+	Features    []string             `json:"features,omitempty"`
 }
 
 func (s *Server) machineViews(ctx context.Context, laneID string) ([]MachineView, error) {
@@ -49,7 +50,7 @@ func (s *Server) machineViews(ctx context.Context, laneID string) ([]MachineView
 		}
 		if c := live[m.Machine.ID]; c != nil {
 			env, idx := c.State()
-			v.Online, v.Policy, v.Version = true, c.Hello.Policy, c.Hello.Version
+			v.Online, v.Policy, v.Version, v.Features = true, c.Hello.Policy, c.Hello.Version, c.Hello.Features
 			t := c.Connected
 			v.ConnectedAt = &t
 			v.LastSeen = time.Now()
@@ -209,6 +210,7 @@ func toMCP(v MachineView) mcp.Machine {
 	return mcp.Machine{
 		ID: v.ID, Name: v.Name, OS: v.OS, Arch: v.Arch, Version: v.Version, Online: v.Online, LastSeen: v.LastSeen,
 		Shell: v.Environment.DefaultShell, Policy: v.Policy, SkillCount: v.SkillCount, SkillsHash: v.SkillsHash,
+		Features: v.Features,
 	}
 }
 

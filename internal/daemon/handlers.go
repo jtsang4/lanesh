@@ -67,7 +67,8 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 	needExec := map[string]bool{
 		protocol.MethodExecStart: true, protocol.MethodJobRead: true, protocol.MethodJobWrite: true,
 		protocol.MethodJobKill: true, protocol.MethodJobList: true, protocol.MethodFileRead: true,
-		protocol.MethodFileWrite: true, protocol.MethodStat: true, protocol.MethodPathInspect: true,
+		protocol.MethodFileWrite: true, protocol.MethodFileEdit: true, protocol.MethodFileList: true,
+		protocol.MethodFileGrep: true, protocol.MethodStat: true, protocol.MethodPathInspect: true,
 		protocol.MethodTransferSend: true, protocol.MethodTransferReceive: true,
 	}
 	if needExec[method] && !c.policy.AllowExec {
@@ -167,7 +168,7 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 			return nil, err
 		}
 		d.audit.write("file.read", map[string]any{"lane": c.lane.LaneID, "path": path})
-		return files.ReadFile(path, p.Offset, p.Limit, p.Encoding)
+		return files.ReadFileWithParams(path, p)
 
 	case protocol.MethodFileWrite:
 		p, err := decodeParams[protocol.FileWriteParams](raw)
@@ -180,6 +181,50 @@ func (d *Daemon) dispatch(ctx context.Context, c *laneConn, method string, raw j
 		}
 		d.audit.write("file.write", map[string]any{"lane": c.lane.LaneID, "path": path, "overwrite": p.Overwrite})
 		return files.WriteFile(path, p)
+
+	case protocol.MethodFileEdit:
+		p, err := decodeParams[protocol.FileEditParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		path, err := files.Expand(p.Path, d.home)
+		if err != nil {
+			return nil, err
+		}
+		d.audit.write("file.edit", map[string]any{"lane": c.lane.LaneID, "path": path, "edits": len(p.Edits)})
+		return files.EditFile(path, p.Edits)
+
+	case protocol.MethodFileList:
+		p, err := decodeParams[protocol.FileListParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		target := p.Path
+		if strings.TrimSpace(target) == "" {
+			target = "~"
+		}
+		path, err := files.Expand(target, d.home)
+		if err != nil {
+			return nil, err
+		}
+		d.audit.write("file.list", map[string]any{"lane": c.lane.LaneID, "path": path})
+		return files.ListDir(path, p.MaxDepth, p.IncludeHidden)
+
+	case protocol.MethodFileGrep:
+		p, err := decodeParams[protocol.FileGrepParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		target := p.Path
+		if strings.TrimSpace(target) == "" {
+			target = "~"
+		}
+		path, err := files.Expand(target, d.home)
+		if err != nil {
+			return nil, err
+		}
+		d.audit.write("file.grep", map[string]any{"lane": c.lane.LaneID, "path": path})
+		return files.Grep(path, p)
 
 	case protocol.MethodStat:
 		p, err := decodeParams[protocol.StatParams](raw)

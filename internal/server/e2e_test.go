@@ -6,6 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -413,10 +416,59 @@ func TestEndToEnd(t *testing.T) {
 	read := mustCall(t, s, "job_read", map[string]any{"machine": "alpha", "job_id": bgID})
 	mustContain(t, "job_read", read, "started", "end of stdout; the job has finished")
 
-	// Files and transfers.
-	mustContain(t, "write_file", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "create_dirs": true}), "wrote 16 B")
+	// Files, editing, directory listing, grep, image reading, and transfers.
+	mustContain(t, "write_file", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha\nline two\nline three\n", "create_dirs": true}), "wrote 37 B")
 	rf := mustCall(t, s, "read_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "~/out/report.txt"})
-	mustContain(t, "read_file", rf, "(16 B)\nhello from alpha\n[lanesh] end ")
+	mustContain(t, "read_file", rf, "(37 B)\nhello from alpha\nline two\nline three\n[lanesh] end ")
+	rfLines := mustCall(t, s, "read_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "~/out/report.txt", "start_line": 2, "end_line": 3})
+	mustContain(t, "read_file lines", rfLines, "lines 2-3 of 3", "2: line two", "3: line three")
+	ed := mustCall(t, s, "edit_file", map[string]any{
+		"machine": "alpha", "briefing": briefA, "path": "out/report.txt",
+		"edits": []map[string]string{
+			{"old_text": "line two", "new_text": "line TWO"},
+			{"old_text": "line three", "new_text": "line THREE"},
+		},
+	})
+	mustContain(t, "edit_file", ed, "2 edits applied", "[lanesh] begin diff", "-line two", "+line TWO", "+line THREE")
+	ld := mustCall(t, s, "list_dir", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out"})
+	mustContain(t, "list_dir", ld, "report.txt")
+	gf := mustCall(t, s, "grep_files", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out", "pattern": "THREE", "glob": "*.txt"})
+	mustContain(t, "grep_files", gf, "1 match in 1 of 1 file", "report.txt:3: line THREE")
+
+	// Native image reading returns ImageContent alongside the framed text header.
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{G: 200, A: 255})
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	imgPath := filepath.Join(a.home, "out", "preview.png")
+	if err := os.WriteFile(imgPath, pngBuf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	imgRes, err := s.CallTool(context.Background(), &sdkmcp.CallToolParams{
+		Name:      "read_file",
+		Arguments: map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/preview.png"},
+	})
+	if err != nil || imgRes.IsError {
+		t.Fatalf("read_file image failed: %v %+v", err, imgRes)
+	}
+	var sawText, sawImage bool
+	for _, c := range imgRes.Content {
+		switch v := c.(type) {
+		case *sdkmcp.TextContent:
+			sawText = strings.Contains(v.Text, "image/png") && strings.HasSuffix(v.Text, "\n"+mcp.EndMarker)
+		case *sdkmcp.ImageContent:
+			sawImage = v.MIMEType == "image/png" && bytes.Equal(v.Data, pngBuf.Bytes())
+		}
+	}
+	if !sawText || !sawImage {
+		t.Fatalf("read_file image content missing text=%v image=%v: %+v", sawText, sawImage, imgRes.Content)
+	}
+	_ = os.Remove(imgPath)
+
+	// Reset report.txt to 16 B before transfer assertions below.
+	mustContain(t, "write_file overwrite", mustCall(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "hello from alpha", "overwrite": true}), "wrote 16 B")
 	if _, errText := call(t, s, "write_file", map[string]any{"machine": "alpha", "briefing": briefA, "path": "out/report.txt", "content": "x"}); !strings.Contains(errText, "exists") {
 		t.Fatalf("overwrite protection: %q", errText)
 	}
@@ -424,7 +476,7 @@ func TestEndToEnd(t *testing.T) {
 		"from_machine": "alpha", "from_briefing": briefA, "from_path": "out",
 		"to_machine": "beta", "to_briefing": briefB, "to_path": "inbox/from-alpha",
 	})
-	mustContain(t, "transfer", tr, "copied 1 file (16 B)")
+	mustContain(t, "transfer", tr, "copied 1 file (16 B)", "(sha256 ")
 	got, err := os.ReadFile(filepath.Join(b.home, "inbox", "from-alpha", "report.txt"))
 	if err != nil || string(got) != "hello from alpha" {
 		t.Fatalf("transferred file = %q, %v", got, err)

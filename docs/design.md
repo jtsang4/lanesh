@@ -213,9 +213,11 @@ allow_exec = true      # 是否开放执行与通用文件操作（exec、read_f
 
 ### 5.4 文件操作
 
-- `read_file` / `write_file` 通过控制通道内联传输内容，适合小文件和文本，内联上限默认 1MB。超过时返回错误，提示改用 `transfer`。
-- 文本按 UTF-8 返回；二进制或非 UTF-8 内容使用 `base64` 编码。
+- `read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` 通过控制通道内联传输，适合文本、目录检索与小文件，文本内联上限默认 1MB（超过时提示改用 `transfer`）。
+- `read_file` 支持按行号范围读取（`start_line` / `end_line`）或按字节分页（`offset` / `limit`）；遇到常见图片格式（PNG / JPEG / WebP / GIF）且体积不超过 4MB 时，直接以 MCP 原生 `ImageContent` 返回给多模态 Agent；其他二进制内容使用 `base64` 编码。
 - `write_file` 支持 `overwrite`、`create_dirs`、`mode`（Unix 权限位），写入时先写临时文件再原子重命名。
+- `edit_file` 对 UTF-8 文本文件执行单段或批量原子局部替换（每段 `old_text` 必须恰好匹配一次，任一段失败不改磁盘），保留原文件权限位并原子替换，返回精简 unified diff。
+- `list_dir` 返回紧凑目录树（跳过 `.git`、`node_modules`、`__pycache__`、`.venv` 等噪音目录，默认跳过隐藏项与最多 4 层、500 条目）；`grep_files` 在机器端搜索文本文件（支持字面量、Go 正则与文件名 `glob` 过滤）。
 - 路径支持 `~` 展开，相对路径以用户 home 为基准。
 
 ## 6. 控制协议
@@ -280,7 +282,7 @@ Server 回复 `welcome`，包含 Server 版本、协议版本范围和 Lane 信�
 | `skill.grep` | Server → Daemon | 在 skill 的文本文件中搜索 |
 | `exec.start` | Server → Daemon | 启动任务 |
 | `job.read` / `job.write` / `job.kill` / `job.list` | Server → Daemon | 任务操作 |
-| `file.read` / `file.write` | Server → Daemon | 内联文件操作 |
+| `file.read` / `file.write` / `file.edit` / `file.list` / `file.grep` | Server → Daemon | 内联文件读写、原子局部编辑、目录树列举与文本检索 |
 | `file.stat` | Server → Daemon | 查询路径是否存在、是否为目录与大小（用于传输前检查） |
 | `path.inspect` | Server → Daemon | 批量检查项目位置的存在性、Git 分支/worktree 与 `AGENTS.md` / `CLAUDE.md` |
 | `transfer.send` / `transfer.receive` | Server → Daemon | 指示守护进程向数据通道上传或从中下载 |
@@ -423,13 +425,13 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - `job_read` 写明本次读取的字节范围，以及接下来怎么做：还有更多时给出下一次的 `offset`；任务已结束并读完时说明输出结束；任务仍在运行时提示用 `wait_ms` 等待新输出。被环形缓冲丢弃的范围也会写明。
 - `job_list` 默认只列出当前 access key 发起的任务，`all: true` 列出该 Lane 在这台机器上的全部任务。
 
-**`read_file(machine, briefing, path, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**
+**`read_file(machine, briefing, path, start_line?, end_line?, offset?, limit?, encoding?)`**、**`write_file(machine, briefing, path, content, encoding?, overwrite?, create_dirs?, mode?)`**、**`edit_file(machine, briefing, path, old_text?, new_text?, edits?)`**、**`list_dir(machine, briefing, path?, max_depth?, include_hidden?)`**、**`grep_files(machine, briefing, pattern, path?, regex?, case_sensitive?, glob?, max_matches?)`**
 
-- 内联文件读写，超过内联上限时提示改用 `transfer`。`read_file` 默认读 20KB，格式与 `read_skill` 读文件相同；二进制内容以 base64 返回。
+- 内联文件读取、写入、原子局部编辑、目录树与文本检索。`read_file` 默认读 20KB，支持按行号范围读取（输出带行号）或字节分页；PNG/JPEG/WebP/GIF 图片在 4MB 内直接以 MCP 原生 `ImageContent` 返回；其他二进制内容以 base64 返回。`edit_file` 支持单次 `old_text` / `new_text` 或 `edits` 批量原子替换并返回 unified diff。
 
-**`transfer(from_machine, from_briefing, from_path, to_machine, to_briefing, to_path, overwrite?)`**
+**`transfer(from_machine, from_briefing?, from_path, to_machine, to_briefing?, to_path, overwrite?)`**
 
-- 在两台机器之间传输文件或目录，见 §7。
+- 在两台机器之间传输文件或目录，见 §7。返回文件数、字节数和已校验的 `sha256`；涉及调用方本机 `(you)` 时免传本机简报令牌。
 
 **`get_project(project?)`**、**`update_project(project, ...)`**
 

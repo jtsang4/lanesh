@@ -27,11 +27,14 @@ const (
 	// FeatureTransferGzip: the daemon compresses or decompresses the transfer
 	// stream when TransferParams.Encoding is "gzip".
 	FeatureTransferGzip = "transfer.gzip"
+	// FeatureFileLines: the daemon supports start_line/end_line and native
+	// image MIME detection on file.read.
+	FeatureFileLines = "file.lines"
 )
 
 // Features returns the features daemons of this build announce.
 func Features() []string {
-	return []string{FeatureTransferParts, FeatureTransferGzip}
+	return []string{FeatureTransferParts, FeatureTransferGzip, FeatureFileLines}
 }
 
 // HTTPErrorMessage returns the message of a Lanesh HTTP error response,
@@ -68,6 +71,9 @@ const (
 	MethodJobList         = "job.list"
 	MethodFileRead        = "file.read"
 	MethodFileWrite       = "file.write"
+	MethodFileEdit        = "file.edit"
+	MethodFileList        = "file.list"
+	MethodFileGrep        = "file.grep"
 	MethodStat            = "file.stat"
 	MethodPathInspect     = "path.inspect"
 	MethodTransferSend    = "transfer.send"
@@ -376,20 +382,26 @@ const (
 
 // FileReadParams reads a file inline.
 type FileReadParams struct {
-	Path     string `json:"path"`
-	Offset   int64  `json:"offset,omitempty"`
-	Limit    int64  `json:"limit,omitempty"`
-	Encoding string `json:"encoding,omitempty"`
+	Path      string `json:"path"`
+	Offset    int64  `json:"offset,omitempty"`
+	Limit     int64  `json:"limit,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
 }
 
 // FileReadResult answers MethodFileRead.
 type FileReadResult struct {
-	Path      string `json:"path"`
-	Content   string `json:"content"`
-	Encoding  string `json:"encoding"`
-	Size      int64  `json:"size"`
-	Offset    int64  `json:"offset"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Path       string `json:"path"`
+	Content    string `json:"content"`
+	Encoding   string `json:"encoding"`
+	Size       int64  `json:"size"`
+	Offset     int64  `json:"offset"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	StartLine  int    `json:"start_line,omitempty"`
+	EndLine    int    `json:"end_line,omitempty"`
+	TotalLines int    `json:"total_lines,omitempty"`
+	MIMEType   string `json:"mime_type,omitempty"`
 }
 
 // FileWriteParams writes a file inline.
@@ -406,6 +418,60 @@ type FileWriteParams struct {
 type FileWriteResult struct {
 	Path string `json:"path"`
 	Size int64  `json:"size"`
+}
+
+// FileEditOp is one unique substring replacement in a text file.
+type FileEditOp struct {
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
+}
+
+// FileEditParams applies one or more unique replacements to a text file.
+type FileEditParams struct {
+	Path  string       `json:"path"`
+	Edits []FileEditOp `json:"edits"`
+}
+
+// FileEditResult answers MethodFileEdit.
+type FileEditResult struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	Applied int    `json:"applied"`
+	Diff    string `json:"diff,omitempty"`
+}
+
+// FileListParams lists a directory tree on a machine.
+type FileListParams struct {
+	Path          string `json:"path,omitempty"`
+	MaxDepth      int    `json:"max_depth,omitempty"`
+	IncludeHidden bool   `json:"include_hidden,omitempty"`
+}
+
+// FileListResult answers MethodFileList.
+type FileListResult struct {
+	Path      string      `json:"path"`
+	Entries   []FileEntry `json:"entries"`
+	Truncated bool        `json:"truncated,omitempty"`
+}
+
+// FileGrepParams searches text files under Path.
+type FileGrepParams struct {
+	Path       string `json:"path,omitempty"`
+	Pattern    string `json:"pattern"`
+	Regex      bool   `json:"regex,omitempty"`
+	IgnoreCase bool   `json:"ignore_case,omitempty"`
+	Glob       string `json:"glob,omitempty"`
+	MaxMatches int    `json:"max_matches,omitempty"`
+}
+
+// FileGrepResult answers MethodFileGrep.
+type FileGrepResult struct {
+	Path          string      `json:"path"`
+	Matches       []GrepMatch `json:"matches"`
+	FilesSearched int         `json:"files_searched"`
+	FilesMatched  int         `json:"files_matched"`
+	Truncated     bool        `json:"truncated,omitempty"`
+	Skipped       []string    `json:"skipped,omitempty"`
 }
 
 // StatParams inspects a path.

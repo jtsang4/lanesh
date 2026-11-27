@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,12 @@ type Machine struct {
 	Policy     protocol.Policy
 	SkillCount int
 	SkillsHash string
+	Features   []string
+}
+
+// HasFeature reports whether the connected daemon announced feature f.
+func (m Machine) HasFeature(f string) bool {
+	return slices.Contains(m.Features, f)
 }
 
 // Backend provides lane state and machine access to the tools.
@@ -181,8 +188,13 @@ func (t *Tools) register(s *mcp.Server) {
 	add(s, tool("job_write", "Write to a background job's stdin.", nil), t.jobWrite)
 	add(s, tool("job_kill", "Stop a job and its children.", rw), t.jobKill)
 	add(s, tool("job_list", "Recent jobs on a machine started with your key (all: every key).", ro), t.jobList)
-	add(s, tool("read_file", "Read a file on a machine (offset/limit; paths relative to home). Binary as base64.", ro), t.readFile)
+	add(s, tool("read_file", "Read a file on a machine (start_line/end_line or byte offset/limit; paths relative to home). "+
+		"Supported images (PNG/JPEG/WebP/GIF) are returned natively; other binaries as base64.", ro), t.readFile)
 	add(s, tool("write_file", "Write a file up to 1 MiB atomically; overwrite to replace.", rw), t.writeFile)
+	add(s, tool("edit_file", "Edit a UTF-8 text file by exact unique old_text replacement (single old_text/new_text, "+
+		"or edits array applied atomically). Returns a unified diff.", rw), t.editFile)
+	add(s, tool("list_dir", "List a directory on a machine as a compact file tree (skips .git, node_modules, etc.).", ro), t.listDir)
+	add(s, tool("grep_files", "Search text files under a path on a machine for a string (or regex). Returns file:line: text.", ro), t.grepFiles)
 	add(s, tool("transfer", "Copy a file or directory between machines. to_path is the full destination path, not its parent; "+
 		"overwrite to replace.", rw), t.transfer)
 }
@@ -291,12 +303,14 @@ func requirePolicy(m Machine, exec bool) error {
 	return nil
 }
 
+const olderDaemonMsg = "this machine runs an older Lanesh that does not support this yet; it updates itself to the server's version automatically, so try again in a minute"
+
 // protoErr unwraps protocol errors and explains methods an older daemon lacks.
 func protoErr(err error) error {
 	var pe *protocol.Error
 	if errors.As(err, &pe) {
 		if pe.Code == protocol.CodeUnsupported && strings.HasPrefix(pe.Message, "unknown method") {
-			return errors.New("this machine runs an older Lanesh that does not support this yet; it updates itself to the server's version automatically, so try again in a minute")
+			return errors.New(olderDaemonMsg)
 		}
 		return errors.New(pe.Message)
 	}

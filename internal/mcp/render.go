@@ -48,9 +48,11 @@ func estimateTokens(s string) int {
 	return ascii/4 + wide
 }
 
-// text accumulates a framed tool result.
+// text accumulates a framed tool result and optional non-text attachments
+// (such as native MCP ImageContent for raster images).
 type text struct {
-	b strings.Builder
+	b     strings.Builder
+	extra []mcp.Content
 }
 
 func (t *text) line(format string, a ...any) {
@@ -65,12 +67,19 @@ func (t *text) raw(s string) {
 	}
 }
 
+func (t *text) addImage(data []byte, mime string) {
+	t.extra = append(t.extra, &mcp.ImageContent{Data: data, MIMEType: mime})
+}
+
 func (t *text) tokens() int { return estimateTokens(t.b.String()) }
 
 // result finishes the text with EndMarker and wraps it in a tool result.
 func (t *text) result() *mcp.CallToolResult {
 	t.b.WriteString(EndMarker)
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: t.b.String()}}}
+	content := make([]mcp.Content, 0, 1+len(t.extra))
+	content = append(content, &mcp.TextContent{Text: t.b.String()})
+	content = append(content, t.extra...)
+	return &mcp.CallToolResult{Content: content}
 }
 
 // String returns the framed text with EndMarker, for errors.

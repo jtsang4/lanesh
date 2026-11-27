@@ -3,12 +3,14 @@
 package files
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +21,10 @@ import (
 
 // Limits for inline operations.
 const (
-	DefaultReadSize = 256 << 10
-	MaxInline       = 1 << 20
+	DefaultReadSize  = 256 << 10
+	MaxInline        = 1 << 20
+	MaxImageInline   = 4 << 20
+	maxLineScanBytes = 16 << 20
 )
 
 // Errors returned by file operations.
@@ -53,10 +57,30 @@ func Expand(p, home string) (string, error) {
 // ReadFile reads up to limit bytes of path from offset. Text is returned as
 // UTF-8; binary content (or encoding "base64") as base64.
 func ReadFile(path string, offset, limit int64, encoding string) (protocol.FileReadResult, error) {
+	return ReadFileWithParams(path, protocol.FileReadParams{
+		Path: path, Offset: offset, Limit: limit, Encoding: encoding,
+	})
+}
+
+// ReadFileWithParams reads a file by line range, as a native inline image
+// (PNG, JPEG, WebP, GIF up to MaxImageInline), or by byte offset/limit.
+func ReadFileWithParams(path string, p protocol.FileReadParams) (protocol.FileReadResult, error) {
+	if p.StartLine < 0 || p.EndLine < 0 {
+		return protocol.FileReadResult{}, errors.New("start_line and end_line must be positive")
+	}
+	byLines := p.StartLine > 0 || p.EndLine > 0
+	if byLines && p.Offset > 0 {
+		return protocol.FileReadResult{}, errors.New("cannot combine start_line/end_line with offset")
+	}
+	if byLines && p.Encoding == protocol.EncodingBase64 {
+		return protocol.FileReadResult{}, errors.New("cannot combine start_line/end_line with base64 encoding")
+	}
+	limit := p.Limit
 	if limit <= 0 {
 		limit = DefaultReadSize
 	}
 	limit = min(limit, MaxInline)
+
 	f, err := os.Open(path) //nolint:gosec // Callers validate the path against policy.
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -72,7 +96,35 @@ func ReadFile(path string, offset, limit int64, encoding string) (protocol.FileR
 	if info.IsDir() {
 		return protocol.FileReadResult{}, fmt.Errorf("%s is a directory", path)
 	}
-	offset = max(offset, 0)
+
+	if byLines {
+		return readFileLines(f, path, info.Size(), p.StartLine, p.EndLine, limit)
+	}
+
+	// Detect common raster images when reading from the start without forced base64.
+	if p.Offset <= 0 && p.Encoding != protocol.EncodingBase64 && info.Size() > 0 {
+		var head [512]byte
+		hn, _ := f.ReadAt(head[:], 0)
+		if mime := detectImageMIME(head[:hn]); mime != "" {
+			if info.Size() > MaxImageInline {
+				return protocol.FileReadResult{
+					Path: path, Encoding: protocol.EncodingBase64, Size: info.Size(),
+					Truncated: true, MIMEType: mime,
+				}, nil
+			}
+			raw := make([]byte, info.Size())
+			n, err := f.ReadAt(raw, 0)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return protocol.FileReadResult{}, err
+			}
+			return protocol.FileReadResult{
+				Path: path, Content: base64.StdEncoding.EncodeToString(raw[:n]),
+				Encoding: protocol.EncodingBase64, Size: info.Size(), MIMEType: mime,
+			}, nil
+		}
+	}
+
+	offset := max(p.Offset, 0)
 	offset = min(offset, info.Size())
 	buf := make([]byte, limit)
 	n, err := f.ReadAt(buf, offset)
@@ -84,10 +136,100 @@ func ReadFile(path string, offset, limit int64, encoding string) (protocol.FileR
 		Path: path, Size: info.Size(), Offset: offset,
 		Truncated: offset+int64(n) < info.Size(),
 	}
-	if encoding != protocol.EncodingBase64 && isText(data) {
+	if p.Encoding != protocol.EncodingBase64 && isText(data) {
 		res.Content, res.Encoding = string(trimPartialRune(data)), protocol.EncodingUTF8
 	} else {
 		res.Content, res.Encoding = base64.StdEncoding.EncodeToString(data), protocol.EncodingBase64
+	}
+	return res, nil
+}
+
+func detectImageMIME(head []byte) string {
+	if len(head) == 0 {
+		return ""
+	}
+	switch http.DetectContentType(head) {
+	case "image/png":
+		return "image/png"
+	case "image/jpeg":
+		return "image/jpeg"
+	case "image/webp":
+		return "image/webp"
+	case "image/gif":
+		return "image/gif"
+	default:
+		return ""
+	}
+}
+
+func readFileLines(f *os.File, path string, totalSize int64, startLine, endLine int, limit int64) (protocol.FileReadResult, error) {
+	start := max(startLine, 1)
+	if endLine > 0 && endLine < start {
+		return protocol.FileReadResult{}, errors.New("end_line must be greater than or equal to start_line")
+	}
+	var head [512]byte
+	hn, _ := f.ReadAt(head[:], 0)
+	if hn > 0 && !isText(head[:hn]) {
+		return protocol.FileReadResult{}, fmt.Errorf("%s is binary; use offset/limit instead of start_line/end_line", path)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return protocol.FileReadResult{}, err
+	}
+
+	r := bufio.NewReaderSize(f, 64<<10)
+	var out strings.Builder
+	var scanned int64
+	lineNum := 0
+	lastLine := 0
+	hitBudget := false
+	scanCapped := false
+
+	for {
+		line, err := r.ReadString('\n')
+		if len(line) > 0 {
+			scanned += int64(len(line))
+			lineNum++
+			if lineNum >= start && (endLine == 0 || lineNum <= endLine) && !hitBudget {
+				if out.Len() > 0 && int64(out.Len()+len(line)) > limit {
+					hitBudget = true
+				} else {
+					if int64(len(line)) > limit {
+						trimmed := trimPartialRune([]byte(line[:limit]))
+						out.Write(trimmed)
+						lastLine = lineNum
+						hitBudget = true
+					} else {
+						out.WriteString(line)
+						lastLine = lineNum
+					}
+				}
+			}
+			// Stop scanning past maxLineScanBytes once we already collected the
+			// requested range (or hit the byte limit), so huge files stay fast.
+			if scanned >= maxLineScanBytes && (hitBudget || (endLine > 0 && lineNum >= endLine)) {
+				scanCapped = true
+				break
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return protocol.FileReadResult{}, err
+		}
+	}
+
+	res := protocol.FileReadResult{
+		Path:      path,
+		Content:   out.String(),
+		Encoding:  protocol.EncodingUTF8,
+		Size:      totalSize,
+		StartLine: start,
+		EndLine:   lastLine,
+		Truncated: hitBudget,
+	}
+	if !scanCapped {
+		res.TotalLines = lineNum
 	}
 	return res, nil
 }

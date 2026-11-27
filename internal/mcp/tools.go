@@ -3,11 +3,13 @@ package mcp
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jtsang4/lanesh/internal/files"
 	"github.com/jtsang4/lanesh/internal/protocol"
 )
 
@@ -239,12 +241,12 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 			where = res.Path + "/"
 		}
 		out.line("[lanesh] skill %q on %q, directory %s (skill directory %s)", res.Skill, m.Name, where, res.Dir)
-		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines)
+		writeTree(&out, res.Path, res.Files, res.FilesTruncated, maxTreeLines, "grep_skill")
 	case in.Path == "":
 		out.line("[lanesh] skill %q on %q: SKILL.md and its files (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
 		out.line("Files:")
-		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines)
+		writeTree(&out, "", res.Files, res.FilesTruncated, skillTreeLines, "grep_skill")
 	default:
 		out.line("[lanesh] skill %q on %q (skill directory %s)", res.Skill, m.Name, res.Dir)
 		writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, false)
@@ -313,8 +315,8 @@ func writeFile(out *text, name, content, encoding string, offset, total int64, s
 	}
 }
 
-func writeTree(out *text, root string, files []protocol.FileEntry, truncated bool, maxLines int) {
-	lines, collapsed, omitted := renderTree(root, files, maxLines)
+func writeTree(out *text, root string, entries []protocol.FileEntry, truncated bool, maxLines int, grepTool string) {
+	lines, collapsed, omitted := renderTree(root, entries, maxLines)
 	if len(lines) == 0 {
 		out.line("(empty)")
 	}
@@ -325,10 +327,10 @@ func writeTree(out *text, root string, files []protocol.FileEntry, truncated boo
 		out.line("[lanesh] %s collapsed to fit; list one with its path, e.g. path=%q.", plural(len(collapsed), "directory", "directories"), collapsed[0])
 	}
 	if omitted > 0 {
-		out.line("[lanesh] %d more entries not shown; use grep_skill or read files by path.", omitted)
+		out.line("[lanesh] %d more entries not shown; use %s or read files by path.", omitted, grepTool)
 	}
 	if truncated {
-		out.line("[lanesh] the listing stopped at %d entries; list a subdirectory to see the rest.", len(files))
+		out.line("[lanesh] the listing stopped at %d entries; list a subdirectory to see the rest.", len(entries))
 	}
 }
 
@@ -610,12 +612,14 @@ func (t *Tools) jobList(ctx context.Context, c caller, in JobListInput) (*text, 
 
 // ReadFileInput reads a file.
 type ReadFileInput struct {
-	Machine  string `json:"machine" jsonschema:"machine name"`
-	Briefing string `json:"briefing" jsonschema:"briefing token from describe_machine"`
-	Path     string `json:"path" jsonschema:"absolute, or relative to home"`
-	Offset   int64  `json:"offset,omitempty"`
-	Limit    int64  `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
-	Encoding string `json:"encoding,omitempty" jsonschema:"base64 to force base64"`
+	Machine   string `json:"machine" jsonschema:"machine name"`
+	Briefing  string `json:"briefing" jsonschema:"briefing token from describe_machine"`
+	Path      string `json:"path" jsonschema:"absolute, or relative to home"`
+	StartLine int    `json:"start_line,omitempty" jsonschema:"1-based first line to read (cannot be combined with offset)"`
+	EndLine   int    `json:"end_line,omitempty" jsonschema:"1-based last line to read (inclusive)"`
+	Offset    int64  `json:"offset,omitempty" jsonschema:"byte offset"`
+	Limit     int64  `json:"limit,omitempty" jsonschema:"bytes (default 20480)"`
+	Encoding  string `json:"encoding,omitempty" jsonschema:"base64 to force base64"`
 }
 
 func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text, error) {
@@ -626,13 +630,20 @@ func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text
 	if err := requirePolicy(m, true); err != nil {
 		return nil, err
 	}
+	byLines := in.StartLine != 0 || in.EndLine != 0
+	if byLines && !m.HasFeature(protocol.FeatureFileLines) {
+		return nil, errors.New(olderDaemonMsg)
+	}
 	limit := in.Limit
 	if limit <= 0 {
 		limit = fileReadBudget
 	}
 	var res protocol.FileReadResult
 	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileRead,
-		protocol.FileReadParams{Path: in.Path, Offset: in.Offset, Limit: limit, Encoding: in.Encoding}, &res)
+		protocol.FileReadParams{
+			Path: in.Path, Offset: in.Offset, Limit: limit, Encoding: in.Encoding,
+			StartLine: in.StartLine, EndLine: in.EndLine,
+		}, &res)
 	t.audit(ctx, c, "file.read", m, map[string]any{"path": in.Path, "bytes": len(res.Content)}, err)
 	if err != nil {
 		return nil, protoErr(err)
@@ -641,9 +652,57 @@ func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text
 	if notice != "" {
 		out.raw(notice)
 	}
+	if res.MIMEType != "" && in.Encoding != protocol.EncodingBase64 {
+		if res.Truncated {
+			out.line("[lanesh] image %s on %q is %s (%s), above the %s inline image limit; copy it with transfer if you need it.",
+				res.Path, m.Name, size(res.Size), res.MIMEType, size(files.MaxImageInline))
+			return &out, nil
+		}
+		raw, err := base64.StdEncoding.DecodeString(res.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decode image: %w", err)
+		}
+		out.line("[lanesh] image on %q: %s (%s, %s)", m.Name, res.Path, size(res.Size), res.MIMEType)
+		out.addImage(raw, res.MIMEType)
+		return &out, nil
+	}
+	if byLines {
+		out.line("[lanesh] file on %q", m.Name)
+		writeFileLines(&out, res)
+		return &out, nil
+	}
 	out.line("[lanesh] file on %q", m.Name)
 	writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, true)
 	return &out, nil
+}
+
+func writeFileLines(out *text, res protocol.FileReadResult) {
+	if res.EndLine == 0 {
+		if res.TotalLines == 0 {
+			out.line("[lanesh] %s is empty (0 lines).", res.Path)
+		} else {
+			out.line("[lanesh] %s has %d lines; start_line=%d is past the end.", res.Path, res.TotalLines, res.StartLine)
+		}
+		return
+	}
+	span := fmt.Sprintf("lines %d-%d", res.StartLine, res.EndLine)
+	if res.TotalLines > 0 {
+		span = fmt.Sprintf("lines %d-%d of %d", res.StartLine, res.EndLine, res.TotalLines)
+	}
+	out.line("[lanesh] begin %s (%s, %s)", res.Path, size(res.Size), span)
+	content := strings.TrimSuffix(res.Content, "\n")
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		out.line("%d: %s", res.StartLine+i, strings.TrimSuffix(line, "\r"))
+	}
+	out.line("[lanesh] end %s", res.Path)
+	if res.Truncated || (res.TotalLines > 0 && res.EndLine < res.TotalLines) {
+		if res.TotalLines > 0 {
+			out.line("[lanesh] %s continues: %d more lines; read on with start_line=%d", res.Path, res.TotalLines-res.EndLine, res.EndLine+1)
+		} else {
+			out.line("[lanesh] %s continues; read on with start_line=%d", res.Path, res.EndLine+1)
+		}
+	}
 }
 
 // WriteFileInput writes a file.
@@ -679,6 +738,148 @@ func (t *Tools) writeFile(ctx context.Context, c caller, in WriteFileInput) (*te
 		out.raw(notice)
 	}
 	out.line("[lanesh] wrote %s to %s on %q.", size(res.Size), res.Path, m.Name)
+	return &out, nil
+}
+
+// EditFileInput replaces unique text snippets in a UTF-8 file.
+type EditFileInput struct {
+	Machine  string                `json:"machine" jsonschema:"machine name"`
+	Briefing string                `json:"briefing" jsonschema:"briefing token from describe_machine"`
+	Path     string                `json:"path" jsonschema:"absolute, or relative to home"`
+	OldText  string                `json:"old_text,omitempty" jsonschema:"text to replace; must occur exactly once"`
+	NewText  string                `json:"new_text,omitempty" jsonschema:"replacement for old_text"`
+	Edits    []protocol.FileEditOp `json:"edits,omitempty" jsonschema:"multiple {old_text, new_text} edits applied atomically in order"`
+}
+
+func (t *Tools) editFile(ctx context.Context, c caller, in EditFileInput) (*text, error) {
+	m, notice, err := t.briefed(ctx, c, "edit_file", "briefing", in.Machine, in.Briefing, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePolicy(m, true); err != nil {
+		return nil, err
+	}
+	if len(in.Edits) > 0 && (in.OldText != "" || in.NewText != "") {
+		return nil, errors.New("use old_text/new_text, or edits, not both")
+	}
+	ops := in.Edits
+	if len(ops) == 0 {
+		if in.OldText == "" {
+			return nil, errors.New("give old_text/new_text or edits")
+		}
+		ops = []protocol.FileEditOp{{OldText: in.OldText, NewText: in.NewText}}
+	}
+	var res protocol.FileEditResult
+	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileEdit,
+		protocol.FileEditParams{Path: in.Path, Edits: ops}, &res)
+	t.audit(ctx, c, "file.edit", m, map[string]any{"path": in.Path, "edits": len(ops), "bytes": res.Size}, err)
+	if err != nil {
+		return nil, protoErr(err)
+	}
+	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
+	if res.Diff == "" {
+		out.line("[lanesh] %s on %q unchanged (%s).", res.Path, m.Name, size(res.Size))
+		return &out, nil
+	}
+	out.line("[lanesh] edited %s on %q (%s applied, %s):", res.Path, m.Name, plural(res.Applied, "edit", "edits"), size(res.Size))
+	out.line("[lanesh] begin diff")
+	out.raw(res.Diff)
+	out.line("[lanesh] end diff")
+	return &out, nil
+}
+
+// ListDirInput lists a directory tree.
+type ListDirInput struct {
+	Machine       string `json:"machine" jsonschema:"machine name"`
+	Briefing      string `json:"briefing" jsonschema:"briefing token from describe_machine"`
+	Path          string `json:"path,omitempty" jsonschema:"directory path (default: home)"`
+	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"directory depth (default 4, max 16)"`
+	IncludeHidden bool   `json:"include_hidden,omitempty" jsonschema:"include dotfiles and dotdirs"`
+}
+
+func (t *Tools) listDir(ctx context.Context, c caller, in ListDirInput) (*text, error) {
+	m, notice, err := t.briefed(ctx, c, "list_dir", "briefing", in.Machine, in.Briefing, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePolicy(m, true); err != nil {
+		return nil, err
+	}
+	var res protocol.FileListResult
+	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileList,
+		protocol.FileListParams{Path: in.Path, MaxDepth: in.MaxDepth, IncludeHidden: in.IncludeHidden}, &res)
+	t.audit(ctx, c, "file.list", m, map[string]any{"path": in.Path, "entries": len(res.Entries)}, err)
+	if err != nil {
+		return nil, protoErr(err)
+	}
+	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
+	out.line("[lanesh] directory %s on %q:", res.Path, m.Name)
+	writeTree(&out, "", res.Entries, res.Truncated, maxTreeLines, "grep_files")
+	return &out, nil
+}
+
+// GrepFilesInput searches text files under a path.
+type GrepFilesInput struct {
+	Machine       string `json:"machine" jsonschema:"machine name"`
+	Briefing      string `json:"briefing" jsonschema:"briefing token from describe_machine"`
+	Pattern       string `json:"pattern" jsonschema:"text to find"`
+	Path          string `json:"path,omitempty" jsonschema:"file or directory (default: home)"`
+	Regex         bool   `json:"regex,omitempty" jsonschema:"pattern is a Go regular expression"`
+	CaseSensitive bool   `json:"case_sensitive,omitempty"`
+	Glob          string `json:"glob,omitempty" jsonschema:"filename glob filter, e.g. *.go or *.md"`
+	MaxMatches    int    `json:"max_matches,omitempty" jsonschema:"default 100, max 500"`
+}
+
+func (t *Tools) grepFiles(ctx context.Context, c caller, in GrepFilesInput) (*text, error) {
+	m, notice, err := t.briefed(ctx, c, "grep_files", "briefing", in.Machine, in.Briefing, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePolicy(m, true); err != nil {
+		return nil, err
+	}
+	if in.Pattern == "" {
+		return nil, errors.New("pattern is required")
+	}
+	var res protocol.FileGrepResult
+	err = t.backend.Call(ctx, c.laneID, m.ID, protocol.MethodFileGrep, protocol.FileGrepParams{
+		Path: in.Path, Pattern: in.Pattern, Regex: in.Regex, IgnoreCase: !in.CaseSensitive,
+		Glob: in.Glob, MaxMatches: in.MaxMatches,
+	}, &res)
+	t.audit(ctx, c, "file.grep", m, map[string]any{"path": in.Path, "matches": len(res.Matches)}, err)
+	if err != nil {
+		return nil, protoErr(err)
+	}
+	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
+	out.line("[lanesh] %q in %s on %q: %s in %d of %s", in.Pattern, res.Path, m.Name,
+		plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
+	shown := 0
+	for _, g := range res.Matches {
+		line := fmt.Sprintf("%s:%d: %s", g.Path, g.Line, g.Text)
+		if out.tokens()+estimateTokens(line) > resultBudget {
+			break
+		}
+		out.raw(line)
+		shown++
+	}
+	if rest := len(res.Matches) - shown; rest > 0 {
+		out.line("[lanesh] %d more matches not shown (to fit the budget); narrow pattern or path.", rest)
+	}
+	if res.Truncated {
+		out.line("[lanesh] the search stopped at %d matches; there are more. Narrow pattern or path, or raise max_matches (up to 500).", len(res.Matches))
+	}
+	if len(res.Skipped) > 0 {
+		out.line("[lanesh] not searched: %s", strings.Join(res.Skipped, ", "))
+	}
 	return &out, nil
 }
 
@@ -734,7 +935,11 @@ func (t *Tools) transfer(ctx context.Context, c caller, in TransferInput) (*text
 	if dest == "" {
 		dest = in.ToPath
 	}
-	out.line("[lanesh] copied %s (%s) from %s on %q to %s on %q.", plural(res.Files, "file", "files"), size(res.Bytes),
-		in.FromPath, from.Name, dest, to.Name)
+	sha := ""
+	if res.SHA256 != "" {
+		sha = " (sha256 " + res.SHA256 + ")"
+	}
+	out.line("[lanesh] copied %s (%s) from %s on %q to %s on %q%s.", plural(res.Files, "file", "files"), size(res.Bytes),
+		in.FromPath, from.Name, dest, to.Name, sha)
 	return &out, nil
 }
