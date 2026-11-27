@@ -470,25 +470,62 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("gamma exec: %q", errText)
 	}
 
-	// Once the machine's skills change, the old token yields a fresh briefing
-	// that says exactly what changed relative to that token, and the new token works.
+	// Once the machine's skills change:
+	// - Unrelated operations (e.g. plain exec, or reading an unchanged skill)
+	//   proceed with a non-blocking update notice carrying the new token and diff
+	//   (no full skill list dump).
+	// - Calls explicitly targeting a changed skill are blocked with a compact
+	//   diff-only reply (also without dumping unchanged skills).
 	writeSkill(t, a.home, "fresh")
 	if err := os.WriteFile(filepath.Join(a.home, ".agents", "skills", "deploy", "scripts", "data.txt"), []byte("payload-v2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	updatedToken := regexp.MustCompile(`use briefing "([a-z]+:[a-z2-7]{8})"`)
 	var fresh string
 	for deadline := time.Now().Add(15 * time.Second); fresh == ""; {
-		_, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("true", "$null")})
-		if strings.Contains(errText, "+ fresh (new)") && strings.Contains(errText, "~ deploy (updated") {
-			if !strings.Contains(errText, "changed since your last briefing") || strings.Contains(errText, "~ review") {
-				t.Fatalf("change report: %q", errText)
+		out, errText := call(t, s, "exec", map[string]any{"machine": "alpha", "briefing": briefA, "command": shellCmd("echo ok", "Write-Output ok")})
+		if errText != "" {
+			t.Fatalf("unrelated exec with historical token should not be blocked: %q", errText)
+		}
+		if strings.Contains(out, "+ fresh (new)") && strings.Contains(out, "~ deploy (updated") {
+			if !strings.Contains(out, "ok") || strings.Contains(out, "- review:") || strings.Contains(out, "Skills (") {
+				t.Fatalf("non-blocking update reply: %q", out)
 			}
-			fresh = match(t, offeredToken, errText)
+			fresh = match(t, updatedToken, out)
 		} else if time.Now().After(deadline) {
-			t.Fatalf("no precise change report after the skills changed: %q", errText)
+			t.Fatalf("no precise change notice after the skills changed: %q", out)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	// Targeting the changed skill "deploy" with the old token IS blocked, with
+	// a compact diff-only briefing (no unchanged skill list).
+	_, errText = call(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "deploy"})
+	mustContain(t, "changed skill blocked", errText, `nothing was run on "alpha"`, `skill "deploy" changed`, "~ deploy (updated", fresh)
+	if strings.Contains(errText, "- review:") || strings.Contains(errText, "Skills (") {
+		t.Fatalf("diff-only block must not dump full skill list:\n%s", errText)
+	}
+	// Reading an unchanged skill with the old token proceeds with the notice.
+	unchangedRead := mustCall(t, s, "read_skill", map[string]any{"machine": "alpha", "briefing": briefA, "skill": "review"})
+	mustContain(t, "unchanged skill proceeds", unchangedRead, "briefing updated", "# review")
+
+	// Transfer skips briefing verification for the caller's own machine (you).
+	selfClient := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-self", Version: "1"}, nil)
+	selfSess, err := selfClient.Connect(h.ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint: h.http.URL + "/lanes/" + h.laneID + "/mcp",
+		HTTPClient: &http.Client{Transport: headerTransport{map[string]string{
+			"Authorization":   "Bearer " + h.access,
+			mcp.HeaderMachine: "alpha",
+		}}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = selfSess.Close() })
+	selfTr := mustCall(t, selfSess, "transfer", map[string]any{
+		"from_machine": "alpha", "from_path": "out/report.txt",
+		"to_machine": "beta", "to_briefing": briefB, "to_path": "inbox/from-self.txt",
+	})
+	mustContain(t, "self transfer", selfTr, "copied 1 file (16 B)")
 
 	// A new session has no token: it gets the current briefing, with nothing
 	// marked as changed. An unrecognized token gets no change report either.

@@ -197,7 +197,7 @@ type ReadSkillInput struct {
 const maxPaths = 20
 
 func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*text, error) {
-	m, err := t.briefed(ctx, c, "read_skill", "briefing", in.Machine, in.Briefing)
+	m, notice, err := t.briefed(ctx, c, "read_skill", "briefing", in.Machine, in.Briefing, in.Skill)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +214,9 @@ func (t *Tools) readSkill(ctx context.Context, c caller, in ReadSkillInput) (*te
 		return res, protoErr(err)
 	}
 	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
 	if len(in.Paths) > 0 {
 		if in.Path != "" || in.Offset != 0 || in.Limit != 0 {
 			return nil, errors.New("paths reads whole files from the start; to read part of a file, use path with offset/limit")
@@ -344,7 +347,7 @@ type GrepInput struct {
 }
 
 func (t *Tools) grepSkill(ctx context.Context, c caller, in GrepInput) (*text, error) {
-	m, err := t.briefed(ctx, c, "grep_skill", "briefing", in.Machine, in.Briefing)
+	m, notice, err := t.briefed(ctx, c, "grep_skill", "briefing", in.Machine, in.Briefing, in.Skill)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +365,9 @@ func (t *Tools) grepSkill(ctx context.Context, c caller, in GrepInput) (*text, e
 		return nil, protoErr(err)
 	}
 	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
 	out.line("[lanesh] %q in skill %q on %q: %s in %d of %s", in.Pattern, res.Skill, m.Name,
 		plural(len(res.Matches), "match", "matches"), res.FilesMatched, plural(res.FilesSearched, "file", "files"))
 	shown := 0
@@ -402,7 +408,7 @@ type ExecInput struct {
 }
 
 func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error) {
-	m, err := t.briefed(ctx, c, "exec", "briefing", in.Machine, in.Briefing)
+	m, notice, err := t.briefed(ctx, c, "exec", "briefing", in.Machine, in.Briefing, in.Skill)
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +432,9 @@ func (t *Tools) exec(ctx context.Context, c caller, in ExecInput) (*text, error)
 		return nil, protoErr(err)
 	}
 	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
 	head := fmt.Sprintf("[lanesh] on %q: %s", m.Name, jobState(st.Status, st.ExitCode, st.DurationMS))
 	if st.Status == protocol.JobRunning || st.OutputTruncated {
 		head += " (job " + st.JobID + ")"
@@ -610,7 +619,7 @@ type ReadFileInput struct {
 }
 
 func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text, error) {
-	m, err := t.briefed(ctx, c, "read_file", "briefing", in.Machine, in.Briefing)
+	m, notice, err := t.briefed(ctx, c, "read_file", "briefing", in.Machine, in.Briefing, "")
 	if err != nil {
 		return nil, err
 	}
@@ -629,6 +638,9 @@ func (t *Tools) readFile(ctx context.Context, c caller, in ReadFileInput) (*text
 		return nil, protoErr(err)
 	}
 	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
 	out.line("[lanesh] file on %q", m.Name)
 	writeFile(&out, res.Path, res.Content, res.Encoding, res.Offset, res.Size, true)
 	return &out, nil
@@ -647,7 +659,7 @@ type WriteFileInput struct {
 }
 
 func (t *Tools) writeFile(ctx context.Context, c caller, in WriteFileInput) (*text, error) {
-	m, err := t.briefed(ctx, c, "write_file", "briefing", in.Machine, in.Briefing)
+	m, notice, err := t.briefed(ctx, c, "write_file", "briefing", in.Machine, in.Briefing, "")
 	if err != nil {
 		return nil, err
 	}
@@ -663,6 +675,9 @@ func (t *Tools) writeFile(ctx context.Context, c caller, in WriteFileInput) (*te
 		return nil, protoErr(err)
 	}
 	var out text
+	if notice != "" {
+		out.raw(notice)
+	}
 	out.line("[lanesh] wrote %s to %s on %q.", size(res.Size), res.Path, m.Name)
 	return &out, nil
 }
@@ -670,18 +685,29 @@ func (t *Tools) writeFile(ctx context.Context, c caller, in WriteFileInput) (*te
 // TransferInput copies between machines.
 type TransferInput struct {
 	FromMachine  string `json:"from_machine"`
-	FromBriefing string `json:"from_briefing" jsonschema:"briefing token of from_machine"`
+	FromBriefing string `json:"from_briefing,omitempty" jsonschema:"briefing token of from_machine (optional for your own machine)"`
 	FromPath     string `json:"from_path" jsonschema:"file or directory"`
 	ToMachine    string `json:"to_machine"`
-	ToBriefing   string `json:"to_briefing" jsonschema:"briefing token of to_machine"`
+	ToBriefing   string `json:"to_briefing,omitempty" jsonschema:"briefing token of to_machine (optional for your own machine)"`
 	ToPath       string `json:"to_path" jsonschema:"full destination path"`
 	Overwrite    bool   `json:"overwrite,omitempty"`
 }
 
+func (t *Tools) briefedTransferSide(ctx context.Context, c caller, param, ref, token string) (Machine, string, error) {
+	m, err := t.online(ctx, c, ref)
+	if err != nil {
+		return Machine{}, "", err
+	}
+	if c.isSelf(m) {
+		return m, "", nil
+	}
+	return t.briefed(ctx, c, "transfer", param, ref, token, "")
+}
+
 func (t *Tools) transfer(ctx context.Context, c caller, in TransferInput) (*text, error) {
 	// Check both machines so that one reply carries every briefing needed.
-	from, fromErr := t.briefed(ctx, c, "transfer", "from_briefing", in.FromMachine, in.FromBriefing)
-	to, toErr := t.briefed(ctx, c, "transfer", "to_briefing", in.ToMachine, in.ToBriefing)
+	from, fromNotice, fromErr := t.briefedTransferSide(ctx, c, "from_briefing", in.FromMachine, in.FromBriefing)
+	to, toNotice, toErr := t.briefedTransferSide(ctx, c, "to_briefing", in.ToMachine, in.ToBriefing)
 	if err := joinBriefings(fromErr, toErr); err != nil {
 		return nil, err
 	}
@@ -698,6 +724,12 @@ func (t *Tools) transfer(ctx context.Context, c caller, in TransferInput) (*text
 		return nil, fmt.Errorf("transfer failed: %w", protoErr(err))
 	}
 	var out text
+	if fromNotice != "" {
+		out.raw(fromNotice)
+	}
+	if toNotice != "" {
+		out.raw(toNotice)
+	}
 	dest := res.Path
 	if dest == "" {
 		dest = in.ToPath

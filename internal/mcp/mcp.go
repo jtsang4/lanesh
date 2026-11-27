@@ -212,30 +212,37 @@ func lastSeen(m Machine) string {
 }
 
 // briefed resolves an online machine and checks the caller's briefing token
-// against the machine's current state. When the token is missing, unknown or
-// outdated, nothing runs: the error carries a fresh briefing and token so that
-// the agent can read it and repeat the call.
+// against the machine's current state.
 //
-// tool and param name the call and its token parameter, so that the reply can
-// say exactly how to retry.
-func (t *Tools) briefed(ctx context.Context, c caller, tool, param, ref, token string) (Machine, error) {
+// When the token is missing or unrecognized (including older than retained
+// history), nothing runs and the error carries a full briefing and fresh token.
+// When the caller holds a known historical token and only skills changed:
+//   - if affectedSkill itself was updated, removed, or reprioritized, the call
+//     is blocked with a compact diff-only reply (omitting unchanged skills);
+//   - otherwise the call proceeds and returns a short notice carrying the new
+//     token and diff so unrelated background skill updates do not interrupt work.
+//
+// tool and param name the call and its token parameter, so that replies state
+// exactly which token to pass next.
+func (t *Tools) briefed(ctx context.Context, c caller, tool, param, ref, token, affectedSkill string) (Machine, string, error) {
 	m, err := t.online(ctx, c, ref)
 	if err != nil {
-		return Machine{}, err
+		return Machine{}, "", err
 	}
 	if t.briefings.Valid(c.laneID, m.ID, m.SkillsHash, token) {
-		return m, nil
+		return m, "", nil
 	}
 	// The server's view of the machine may lag behind; ask the machine itself.
 	d, err := t.describe(ctx, c, m)
 	if err != nil {
-		return Machine{}, err
+		return Machine{}, "", err
 	}
 	m.SkillsHash, m.Policy = d.Skills.Hash, d.Policy
 	if t.briefings.Valid(c.laneID, m.ID, m.SkillsHash, token) {
-		return m, nil
+		return m, "", nil
 	}
-	reason, changes := "no briefing token was given", ""
+	newToken := t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash)
+	reason := "no briefing token was given"
 	if strings.TrimSpace(token) != "" {
 		reason = "its briefing token is unknown (or older than the versions Lanesh keeps)"
 		// Find the version the token was issued for, so that the agent learns
@@ -243,18 +250,24 @@ func (t *Tools) briefed(ctx context.Context, c caller, tool, param, ref, token s
 		// example new sessions) get a plain briefing.
 		for _, old := range t.backend.SkillHistory(ctx, c.laneID, m.ID) {
 			if old.Hash != d.Skills.Hash && t.briefings.Valid(c.laneID, m.ID, old.Hash, token) {
-				reason = "the machine's skills changed since your last briefing"
-				changes = renderChanges(diffSkills(old, d.Skills))
+				ch := diffSkills(old, d.Skills)
+				changes := renderChanges(ch)
 				if changes == "" {
 					changes = "Changes since your last briefing: only which of two same-named skills takes priority changed."
 				}
-				break
+				if skillAffected(ch, old, d.Skills, affectedSkill) {
+					return Machine{}, "", &BriefingRequired{
+						Machine: m.Name,
+						Text:    renderDiffBriefing(m, newToken, affectedSkill, tool, param, changes),
+					}
+				}
+				return m, renderBriefingNotice(m, newToken, param, changes), nil
 			}
 		}
 	}
-	return Machine{}, &BriefingRequired{
+	return Machine{}, "", &BriefingRequired{
 		Machine: m.Name,
-		Text:    renderBriefing(m, d, t.briefings.Token(c.laneID, m.ID, m.Name, d.Skills.Hash), reason, tool, param, changes),
+		Text:    renderBriefing(m, d, newToken, reason, tool, param, ""),
 	}
 }
 

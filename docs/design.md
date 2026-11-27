@@ -364,7 +364,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 - Lanesh 自己省略的内容（超出预算、超出上限、二进制文件等）都在原处用一行 `[lanesh] …` 说明省略了多少，以及怎样读取剩下的部分（例如 `read on with offset=20480`）。
 - 最后一行总是 `[lanesh] end of result`，错误结果也一样。Agent 没有看到这一行，或者看到 `begin` 却没有对应的 `end`，就说明客户端截断了结果。instructions 中写明了这条规则。
 
-结果有预算，尽量不触发客户端的截断（Claude Code、Codex 等对单次工具输出的上限大约在 1 万到 2.5 万 token）：整个结果约 7,000 token，`describe_machine` 中的 skill 列表约 5,000 token，列表中的描述最多 200 字符，单次读文件默认 20KB。
+结果有预算，尽量不触发客户端的截断（Claude Code、Codex 等对单次工具输出的上限大约在 1 万到 2.5 万 token）：整个结果约 7,000 token，`describe_machine` 中的 skill 列表约 2,800 token，列表中的描述最多 140 字符，单次读文件默认 20KB。
 
 所有接受 `machine` 参数的工具，机器离线时都返回明确的错误。
 
@@ -458,9 +458,9 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 
 **校验**
 
-- `read_skill`、`grep_skill`、`exec`、`read_file`、`write_file` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌。`job_*` 操作已经存在的任务，不需要令牌。
+- `read_skill`、`grep_skill`、`exec`、`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` 需要对应机器的 `briefing`；`transfer` 需要来源和目标机器各自的令牌，但涉及调用方本机（`X-Lanesh-Machine` / `?machine=` 标记的 `(you)`）时免校验本机令牌。`job_*` 操作已经存在的任务，不需要令牌。
 - Server 先用自己缓存的机器状态校验；不匹配时向机器获取一次最新简报再校验，以免因为 Server 的缓存落后而误判。
-- 令牌缺失、错误或过时（skill 已变化）时：**不执行任何操作**，直接返回最新简报和当前令牌，形式如下。开头一行写明下一步动作：用哪个工具、哪个参数（`transfer` 是 `from_briefing` / `to_briefing`）、哪个令牌重试，并说明不需要再调用 `describe_machine`。Agent 阅读后重试一次即可：
+- **令牌缺失、未知或早于保留历史**时：**不执行任何操作**，直接返回最新完整简报和当前令牌，形式如下。开头一行写明下一步动作：用哪个工具、哪个参数（`transfer` 是 `from_briefing` / `to_briefing`）、哪个令牌重试，并说明不需要再调用 `describe_machine`。Agent 阅读后重试一次即可：
 
   ```
   [lanesh] nothing was run on "build-box": no briefing token was given.
@@ -472,6 +472,10 @@ Web UI 会为常见客户端生成可以直接复制的配置。
   - deploy-preview: …
   [lanesh] end of result
   ```
+
+- **持已知历史令牌、仅 skill 发生变动**时（在 `skill_history` 中匹配到令牌对应的旧版本）：
+  - 若本次调用显式指向的 skill（`read_skill`、`grep_skill` 或 `exec(skill=…)`）本身被修改、删除或优先级变更：**仍拦截不执行**，但只返回精简的变化 diff 与新令牌，不重传未变化的完整 skill 列表。
+  - 若为其他与变动 skill 无关的操作（普通 `exec`、文件读写编辑检索、`transfer` 或访问未变动的 skill）：**放行执行**，并在返回结果开头附带新令牌与变化 diff 提示，避免后台无关 skill 更新打断正在进行的工作或并行调用同时倾倒多份完整简报。
 
 - `transfer` 两端都需要简报时，在一次返回中给出两台机器的简报。
 

@@ -92,7 +92,7 @@ func writeMachine(t *text, m Machine, d protocol.DescribeResult) {
 			names[i] = s.Name
 		}
 		list := strings.Join(names, ", ")
-		if used+estimateTokens(list) <= skillsBudget+1500 {
+		if used+estimateTokens(list) <= skillsBudget+1000 {
 			t.line("[lanesh] %d more skills, names only (to fit the budget): %s", len(rest), list)
 		} else {
 			t.line("[lanesh] %d more skills not listed (to fit the budget); see them with find_skills machine=%q", len(rest), m.Name)
@@ -137,6 +137,64 @@ func renderBriefing(m Machine, d protocol.DescribeResult, token, reason, tool, p
 	}
 	writeMachine(&t, m, d)
 	return t.String()
+}
+
+// renderDiffBriefing formats a compact rejection when the caller holds a known
+// historical token and the specific skill it targeted has changed or been
+// removed. It omits the unchanged skill list to avoid bloating context.
+func renderDiffBriefing(m Machine, token, skill, tool, param, changes string) string {
+	var t text
+	t.line("[lanesh] nothing was run on %q: skill %q changed since your last briefing.", m.Name, skill)
+	t.line("Next: repeat the same %s call with %s %q (read the skill again if you relied on it).", tool, param, token)
+	if changes != "" {
+		t.raw(changes)
+	}
+	return t.String()
+}
+
+// renderBriefingNotice formats a non-blocking header prepended to a tool
+// result when unrelated skills changed since the caller's previous token.
+func renderBriefingNotice(m Machine, token, param, changes string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[lanesh] briefing updated for %q: use %s %q on future calls.\n", m.Name, param, token)
+	if changes != "" {
+		b.WriteString(changes)
+		if !strings.HasSuffix(changes, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// skillAffected reports whether skillName was updated, removed, or had its
+// shadowing priority changed between old and cur.
+func skillAffected(ch SkillChanges, old, cur protocol.SkillIndex, skillName string) bool {
+	if skillName == "" {
+		return false
+	}
+	for _, s := range ch.Updated {
+		if s.Name == skillName {
+			return true
+		}
+	}
+	for _, s := range ch.Removed {
+		if s.Name == skillName {
+			return true
+		}
+	}
+	// Check if same-named skill priority (source/path) changed even when hash matched.
+	oldSkill, oldOK := findSkillByName(old.Skills, skillName)
+	curSkill, curOK := findSkillByName(cur.Skills, skillName)
+	return oldOK && curOK && (oldSkill.Source != curSkill.Source || oldSkill.Path != curSkill.Path)
+}
+
+func findSkillByName(list []protocol.Skill, name string) (protocol.Skill, bool) {
+	for _, s := range list {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return protocol.Skill{}, false
 }
 
 // SkillChanges is the difference between two skill index versions.

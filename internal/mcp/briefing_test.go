@@ -102,4 +102,38 @@ func TestRenderBriefingAndJoin(t *testing.T) {
 	if joinBriefings(nil, nil) != nil {
 		t.Fatal("no errors must join to nil")
 	}
+
+	diffText := renderDiffBriefing(Machine{Name: "mac"}, "mac:newtoken", "deploy", "read_skill", "briefing", "Changes since your last briefing:\n~ deploy (updated)")
+	for _, want := range []string{`[lanesh] nothing was run on "mac": skill "deploy" changed`, `repeat the same read_skill call with briefing "mac:newtoken"`, "~ deploy (updated)", EndMarker} {
+		if !strings.Contains(diffText, want) {
+			t.Errorf("diff briefing missing %q in:\n%s", want, diffText)
+		}
+	}
+	if strings.Contains(diffText, "Skills (") {
+		t.Fatalf("diff briefing must not dump full skill list:\n%s", diffText)
+	}
+
+	notice := renderBriefingNotice(Machine{Name: "mac"}, "mac:newtoken", "briefing", "Changes since your last briefing:\n+ fresh (new)")
+	for _, want := range []string{`[lanesh] briefing updated for "mac": use briefing "mac:newtoken"`, "+ fresh (new)"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice missing %q in:\n%s", want, notice)
+		}
+	}
+
+	oldIdx := protocol.SkillIndex{Skills: []protocol.Skill{
+		{Name: "deploy", Source: "agents", Path: "/a/deploy", Hash: "1"},
+		{Name: "review", Source: "agents", Path: "/a/review", Hash: "2"},
+	}}
+	curIdx := protocol.SkillIndex{Skills: []protocol.Skill{
+		{Name: "deploy", Source: "agents", Path: "/a/deploy", Hash: "1b"},
+		{Name: "review", Source: "agents", Path: "/a/review", Hash: "2"},
+		{Name: "fresh", Source: "agents", Path: "/a/fresh", Hash: "3"},
+	}}
+	ch := diffSkills(oldIdx, curIdx)
+	if !skillAffected(ch, oldIdx, curIdx, "deploy") {
+		t.Fatal("updated skill must be affected")
+	}
+	if skillAffected(ch, oldIdx, curIdx, "review") || skillAffected(ch, oldIdx, curIdx, "") {
+		t.Fatal("unchanged or empty skill must not be affected")
+	}
 }
