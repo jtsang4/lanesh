@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +17,10 @@ const MaxInspectPaths = 50
 var agentFiles = []string{"AGENTS.md", "CLAUDE.md", filepath.Join(".claude", "CLAUDE.md")}
 
 // Inspect reports facts about a directory that help an agent work in it:
-// whether it exists, whether it is in a Git working tree (and on which
-// branch), and which agent instruction files it has. It reads files only and
-// never runs commands.
+// whether it exists, its canonical path when symbolic links are involved,
+// whether it is in a Git working tree (branch, short commit, worktree), and
+// which agent instruction files it has. It reads files only and never runs
+// commands.
 func Inspect(path, home string) protocol.PathInfo {
 	info := protocol.PathInfo{Path: path}
 	resolved, err := Expand(path, home)
@@ -32,10 +34,13 @@ func Inspect(path, home string) protocol.PathInfo {
 		return info
 	}
 	info.Exists, info.Dir = true, st.IsDir()
+	if realPath, err := filepath.EvalSymlinks(resolved); err == nil && realPath != resolved {
+		info.RealPath = realPath
+	}
 	if !info.Dir {
 		return info
 	}
-	info.Git, info.Branch, info.Worktree = gitState(resolved)
+	info.Git, info.Branch, info.Commit, info.Worktree = gitState(resolved)
 	info.AgentFiles = findAgentFiles(resolved)
 	return info
 }
@@ -67,56 +72,126 @@ func findAgentFiles(dir string) []string {
 }
 
 // gitState finds the Git working tree containing dir by looking for .git in
-// dir and its parents, and reads its HEAD.
-func gitState(dir string) (git bool, branch string, worktree bool) {
+// dir and its parents, and reads its HEAD branch and short commit hash.
+func gitState(dir string) (git bool, branch, commit string, worktree bool) {
 	for d := dir; ; {
 		dotGit := filepath.Join(d, ".git")
 		if st, err := os.Stat(dotGit); err == nil {
 			gitDir := dotGit
+			commonDir := dotGit
 			if !st.IsDir() {
 				// A linked worktree or submodule: .git is a file naming the
 				// real Git directory.
 				data, err := os.ReadFile(dotGit) //nolint:gosec // A fixed name inside the inspected directory.
 				if err != nil {
-					return true, "", false
+					return true, "", "", false
 				}
 				target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
 				if !ok {
-					return true, "", false
+					return true, "", "", false
 				}
 				gitDir = strings.TrimSpace(target)
 				if !filepath.IsAbs(gitDir) {
 					gitDir = filepath.Join(d, gitDir)
 				}
+				commonDir = gitDir
 				// A linked worktree's Git directory names the main one in
 				// commondir; a submodule's does not.
-				_, err = os.Stat(filepath.Join(gitDir, "commondir")) //nolint:gosec // Follows .git as Git does; only checks existence, under the file access policy.
-				worktree = err == nil
+				if raw, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil { //nolint:gosec // Follows .git as Git does; only checks existence, under the file access policy.
+					worktree = true
+					cd := strings.TrimSpace(string(raw))
+					if cd != "" {
+						if !filepath.IsAbs(cd) {
+							cd = filepath.Join(gitDir, cd)
+						}
+						commonDir = filepath.Clean(cd)
+					}
+				}
 			}
-			return true, headBranch(gitDir), worktree
+			branch, commit = headState(gitDir, commonDir)
+			return true, branch, commit, worktree
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return false, "", false
+			return false, "", "", false
 		}
 		d = parent
 	}
 }
 
-func headBranch(gitDir string) string {
+func headState(gitDir, commonDir string) (branch, commit string) {
 	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD")) //nolint:gosec // HEAD of a Git directory found above.
+	if err != nil {
+		return "", ""
+	}
+	head := strings.TrimSpace(string(data))
+	if refName, ok := strings.CutPrefix(head, "ref: "); ok {
+		refName = strings.TrimSpace(refName)
+		if ref, ok := strings.CutPrefix(refName, "refs/heads/"); ok && ref != ".invalid" {
+			branch = ref
+		}
+		if refName != "" && !strings.HasSuffix(refName, "/.invalid") {
+			commit = resolveRefCommit(gitDir, commonDir, refName)
+		}
+		return branch, commit
+	}
+	if short := shortCommit(head); short != "" {
+		return "detached at " + short, short
+	}
+	return "", ""
+}
+
+func resolveRefCommit(gitDir, commonDir, refName string) string {
+	// Refuse any ref path that escapes the git directory.
+	rel := filepath.Clean(filepath.FromSlash(refName))
+	if !filepath.IsLocal(rel) {
+		return ""
+	}
+	dirs := []string{gitDir}
+	if commonDir != "" && commonDir != gitDir {
+		dirs = append(dirs, commonDir)
+	}
+	for _, base := range dirs {
+		if data, err := os.ReadFile(filepath.Join(base, rel)); err == nil { //nolint:gosec // Local ref under gitDir/commonDir validated with filepath.IsLocal.
+			if short := shortCommit(strings.TrimSpace(string(data))); short != "" {
+				return short
+			}
+		}
+	}
+	// Fall back to packed-refs in commonDir.
+	packedDir := commonDir
+	if packedDir == "" {
+		packedDir = gitDir
+	}
+	f, err := os.Open(filepath.Join(packedDir, "packed-refs")) //nolint:gosec // Fixed filename inside the Git directory.
 	if err != nil {
 		return ""
 	}
-	head := strings.TrimSpace(string(data))
-	if ref, ok := strings.CutPrefix(head, "ref: refs/heads/"); ok {
-		if ref == ".invalid" {
-			return "" // reftable storage: HEAD is a stub; the branch is not in files
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || line[0] == '#' || line[0] == '^' {
+			continue
 		}
-		return ref
-	}
-	if len(head) >= 7 {
-		return "detached at " + head[:7]
+		hash, name, ok := strings.Cut(line, " ")
+		if ok && name == refName {
+			return shortCommit(hash)
+		}
 	}
 	return ""
+}
+
+func shortCommit(s string) string {
+	if len(s) < 7 {
+		return ""
+	}
+	for i := range len(s) {
+		c := s[i]
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+		if !isHex {
+			return ""
+		}
+	}
+	return strings.ToLower(s[:7])
 }

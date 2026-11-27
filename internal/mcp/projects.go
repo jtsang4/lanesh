@@ -125,7 +125,11 @@ func writeLocations(out *text, locs []LocationView) {
 	}
 	out.line("Locations (where this project lives; a guide, not a limit):")
 	for _, l := range locs {
-		out.line("- %s %s: %s", l.MachineName, l.Path, locationState(l))
+		realNote := ""
+		if l.Info != nil && l.Info.RealPath != "" && l.Info.RealPath != l.Info.Resolved {
+			realNote = fmt.Sprintf(" (real path: %s)", l.Info.RealPath)
+		}
+		out.line("- %s %s%s: %s", l.MachineName, l.Path, realNote, locationState(l))
 	}
 }
 
@@ -150,6 +154,9 @@ func locationState(l LocationView) string {
 		}
 		if l.Info.Branch != "" {
 			g += ", branch " + l.Info.Branch
+		}
+		if l.Info.Commit != "" && !strings.HasPrefix(l.Info.Branch, "detached at ") {
+			g += " (" + l.Info.Commit + ")"
 		}
 		parts = append(parts, g)
 	}

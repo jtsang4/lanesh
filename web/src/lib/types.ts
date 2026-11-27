@@ -137,10 +137,12 @@ export interface CreatedKey {
 export interface PathInfo {
 	path: string;
 	resolved?: string;
+	real_path?: string;
 	exists: boolean;
 	dir?: boolean;
 	git?: boolean;
 	branch?: string;
+	commit?: string;
 	worktree?: boolean;
 	agent_files?: string[];
 	error?: string;

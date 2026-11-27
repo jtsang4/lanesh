@@ -19,8 +19,13 @@ func write(t *testing.T, path, content string) {
 
 func TestInspect(t *testing.T) {
 	home := t.TempDir()
+	// Canonicalize temp dir so macOS /var -> /private/var does not mask symlink tests.
+	if canonical, err := filepath.EvalSymlinks(home); err == nil {
+		home = canonical
+	}
 	repo := filepath.Join(home, "code", "app")
 	write(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
+	write(t, filepath.Join(repo, ".git", "refs", "heads", "main"), "a1b2c3d4e5f60708090a0b0c0d0e0f1011121314\n")
 	write(t, filepath.Join(repo, "AGENTS.md"), "# rules")
 	write(t, filepath.Join(repo, "web", "package.json"), "{}")
 	linked := os.Symlink("AGENTS.md", filepath.Join(repo, "CLAUDE.md")) == nil
@@ -30,28 +35,42 @@ func TestInspect(t *testing.T) {
 	if linked {
 		want = append(want, "CLAUDE.md -> AGENTS.md")
 	}
-	if !got.Exists || !got.Dir || !got.Git || got.Branch != "main" || got.Worktree || !reflect.DeepEqual(got.AgentFiles, want) {
+	if !got.Exists || !got.Dir || !got.Git || got.Branch != "main" || got.Commit != "a1b2c3d" || got.Worktree || got.RealPath != "" || !reflect.DeepEqual(got.AgentFiles, want) {
 		t.Fatalf("repo: %+v", got)
 	}
 	if got.Resolved != repo {
 		t.Fatalf("resolved = %q", got.Resolved)
 	}
 
+	// Symlinked directory reports its canonical real_path.
+	linkDir := filepath.Join(home, "alias", "app")
+	if err := os.MkdirAll(filepath.Dir(linkDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if os.Symlink(repo, linkDir) == nil {
+		got = Inspect("~/alias/app", home)
+		if !got.Exists || !got.Dir || got.RealPath != repo || got.Commit != "a1b2c3d" {
+			t.Fatalf("symlinked repo: %+v", got)
+		}
+	}
+
 	// A subdirectory of a repository is in it, without its agent files.
 	sub := Inspect(filepath.Join(repo, "web"), home)
-	if !sub.Git || sub.Branch != "main" || len(sub.AgentFiles) != 0 {
+	if !sub.Git || sub.Branch != "main" || sub.Commit != "a1b2c3d" || len(sub.AgentFiles) != 0 {
 		t.Fatalf("subdirectory: %+v", sub)
 	}
 
 	// A linked worktree: .git is a file pointing into the main repository.
+	// Packed refs in commondir are resolved when loose refs are absent.
 	wt := filepath.Join(home, "code", "app-feature")
 	gitDir := filepath.Join(repo, ".git", "worktrees", "app-feature")
 	write(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/feature/login\n")
 	write(t, filepath.Join(gitDir, "commondir"), "../..\n")
+	write(t, filepath.Join(repo, ".git", "packed-refs"), "# pack-refs with: peeled\nfedcba9876543210fedcba9876543210fedcba98 refs/heads/feature/login\n")
 	write(t, filepath.Join(wt, ".git"), "gitdir: "+gitDir+"\n")
 	write(t, filepath.Join(wt, ".claude", "CLAUDE.md"), "x")
 	got = Inspect(wt, home)
-	if !got.Git || !got.Worktree || got.Branch != "feature/login" || !reflect.DeepEqual(got.AgentFiles, []string{".claude/CLAUDE.md"}) {
+	if !got.Git || !got.Worktree || got.Branch != "feature/login" || got.Commit != "fedcba9" || !reflect.DeepEqual(got.AgentFiles, []string{".claude/CLAUDE.md"}) {
 		t.Fatalf("worktree: %+v", got)
 	}
 
@@ -66,13 +85,13 @@ func TestInspect(t *testing.T) {
 
 	// Reftable repositories keep a stub HEAD; the branch is left unknown.
 	write(t, filepath.Join(home, "rt", ".git", "HEAD"), "ref: refs/heads/.invalid\n")
-	if got := Inspect("rt", home); !got.Git || got.Branch != "" {
+	if got := Inspect("rt", home); !got.Git || got.Branch != "" || got.Commit != "" {
 		t.Fatalf("reftable: %+v", got)
 	}
 
 	// Detached HEAD, plain directories and missing paths.
 	write(t, filepath.Join(home, "d", ".git", "HEAD"), "0123456789abcdef\n")
-	if got := Inspect("d", home); got.Branch != "detached at 0123456" {
+	if got := Inspect("d", home); got.Branch != "detached at 0123456" || got.Commit != "0123456" {
 		t.Fatalf("detached: %+v", got)
 	}
 	plain := filepath.Join(home, "notes")

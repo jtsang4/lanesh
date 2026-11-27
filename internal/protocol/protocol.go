@@ -428,17 +428,21 @@ type PathInspectParams struct {
 }
 
 // PathInfo describes one inspected path. Path is as given; Resolved is the
-// absolute path it refers to on the machine.
+// absolute path it refers to on the machine, and RealPath is set when
+// symbolic links resolve to a different canonical path.
 type PathInfo struct {
 	Path     string `json:"path"`
 	Resolved string `json:"resolved,omitempty"`
+	RealPath string `json:"real_path,omitempty"`
 	Exists   bool   `json:"exists"`
 	Dir      bool   `json:"dir,omitempty"`
 	// Git is set when the path is inside a Git working tree; Branch is its
-	// checked-out branch (or "detached at <commit>"), and Worktree is set for
-	// a linked worktree (git worktree add).
+	// checked-out branch (or "detached at <commit>"), Commit is the short
+	// HEAD commit hash when available, and Worktree is set for a linked
+	// worktree (git worktree add).
 	Git      bool   `json:"git,omitempty"`
 	Branch   string `json:"branch,omitempty"`
+	Commit   string `json:"commit,omitempty"`
 	Worktree bool   `json:"worktree,omitempty"`
 	// AgentFiles lists agent instruction files in the directory, such as
 	// "AGENTS.md" or "CLAUDE.md -> AGENTS.md" when one links to the other.

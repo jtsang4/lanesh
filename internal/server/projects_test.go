@@ -16,22 +16,32 @@ func TestProjects(t *testing.T) {
 	a := h.startMachine("alpha", true)
 	h.startMachine("gamma", false)
 	repo := filepath.Join(a.home, "code", "app")
-	for path, content := range map[string]string{".git/HEAD": "ref: refs/heads/main\n", "AGENTS.md": "# rules\n"} {
+	for path, content := range map[string]string{
+		".git/HEAD":            "ref: refs/heads/main\n",
+		".git/refs/heads/main": "1234567890abcdef1234567890abcdef12345678\n",
+		"AGENTS.md":            "# rules\n",
+	} {
 		full := filepath.Join(repo, filepath.FromSlash(path))
 		_ = os.MkdirAll(filepath.Dir(full), 0o755)
 		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	linkedPath := filepath.Join(a.home, "link-app")
+	hasSymlink := os.Symlink(repo, linkedPath) == nil
 	s := h.mcpClient(h.access)
 
 	out := mustCall(t, s, "get_project", nil)
 	mustContain(t, "no projects", out, "no projects yet")
 
+	addLocs := []map[string]string{{"machine": "alpha", "path": "~/code/app"}, {"machine": "gamma", "path": "/srv/app"}}
+	if hasSymlink {
+		addLocs = append(addLocs, map[string]string{"machine": "alpha", "path": "~/link-app"})
+	}
 	out = mustCall(t, s, "update_project", map[string]any{
 		"project": "App", "create": true,
 		"context":       "# App\nThe web app for customers.\n\n## Rules\n- New work in a git worktree.\n\n## Status\nLogin page in progress.",
-		"add_locations": []map[string]string{{"machine": "alpha", "path": "~/code/app"}, {"machine": "gamma", "path": "/srv/app"}},
+		"add_locations": addLocs,
 	})
 	mustContain(t, "create", out, `created project "App" (revision 1)`)
 	if _, errText := call(t, s, "update_project", map[string]any{"project": "app", "create": true}); !strings.Contains(errText, "already exists") {
@@ -41,10 +51,14 @@ func TestProjects(t *testing.T) {
 	out = mustCall(t, s, "get_project", map[string]any{"project": "app"})
 	mustContain(t, "get", out,
 		`[lanesh] project "App" (revision 1, updated `, "by a)",
-		"- alpha ~/code/app: git, branch main; has AGENTS.md",
+		"git, branch main (1234567); has AGENTS.md",
 		"read it before working there",
 		"- gamma /srv/app: the machine does not allow file access; not checked",
 		"[lanesh] begin context\n# App\nThe web app for customers.", "[lanesh] end context", "revision 1")
+	if hasSymlink {
+		canonicalRepo, _ := filepath.EvalSymlinks(repo)
+		mustContain(t, "symlink real path", out, "- alpha ~/link-app (real path: "+canonicalRepo+"): git, branch main (1234567)")
+	}
 
 	// Edits: replace a unique snippet, append, whole replacement with a revision.
 	mustContain(t, "edit", mustCall(t, s, "update_project", map[string]any{
@@ -84,8 +98,15 @@ func TestProjects(t *testing.T) {
 		UpdatedByName string             `json:"updated_by_name"`
 	}
 	h.api(http.MethodGet, base+"/app", nil, &view, http.StatusOK)
-	if view.Revision != 4 || len(view.Locations) != 1 || view.Locations[0].Info == nil || view.Locations[0].Info.Branch != "main" || view.UpdatedByName != "a" {
+	wantLocs := 1
+	if hasSymlink {
+		wantLocs = 2
+	}
+	if view.Revision != 4 || len(view.Locations) != wantLocs || view.Locations[0].Info == nil || view.Locations[0].Info.Branch != "main" || view.Locations[0].Info.Commit != "1234567" || view.UpdatedByName != "a" {
 		t.Fatalf("admin view: %+v", view)
+	}
+	if hasSymlink && view.Locations[1].Info.RealPath == "" {
+		t.Fatalf("expected real_path on symlink location: %+v", view.Locations[1].Info)
 	}
 	h.api(http.MethodPatch, base+"/"+view.ID, map[string]any{"context": "x", "base_revision": 3}, nil, http.StatusConflict)
 	h.api(http.MethodPatch, base+"/"+view.ID, map[string]any{"name": "Shop", "base_revision": 4}, &view, http.StatusOK)

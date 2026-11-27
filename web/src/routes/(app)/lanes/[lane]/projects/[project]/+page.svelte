@@ -301,7 +301,12 @@
 							<div class="where">
 								<StatusDot online={l.online} label={false} />
 								<span class="machine">{l.machine_name}</span>
-								<span class="path mono" title={l.info?.resolved ?? l.path}>{l.path}</span>
+								<span
+									class="path mono"
+									title={l.info?.real_path
+										? `${l.info.resolved ?? l.path} → ${l.info.real_path}`
+										: (l.info?.resolved ?? l.path)}>{l.path}</span
+								>
 							</div>
 							<div class="facts">
 								{#if l.removed}
@@ -319,6 +324,9 @@
 										<Badge tone="outline">
 											<Icon name="branch" size={11} />
 											{l.info.branch || 'git'}
+											{#if l.info.commit && !l.info.branch?.startsWith('detached at ')}
+												<span class="faint mono">· {l.info.commit}</span>
+											{/if}
 											{#if l.info.worktree}<span class="faint">· {t('project.loc.worktree')}</span
 												>{/if}
 										</Badge>
