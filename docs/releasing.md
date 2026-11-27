@@ -8,12 +8,13 @@
 
 1. **GoReleaser**（`goreleaser` job）
    - 构建 `darwin` / `linux` / `windows` × `amd64` / `arm64` 的二进制，前端已嵌入
-   - 在 GitHub Releases 发布：
-     - 压缩包 `lanesh_<version>_<os>_<arch>.tar.gz`（Windows 为 `.zip`），供手动下载
-     - 独立二进制 `lanesh_<version>_<os>_<arch>[.exe]`，供 npm 启动器、安装脚本和自动升级使用
-     - `checksums.txt`（sha256）
+   - 创建 GitHub Draft Release，上传全部压缩包、独立二进制和 `checksums.txt`
    - 推送多架构镜像 `ghcr.io/jtsang4/lanesh`，标签为 `<version>`；正式版本额外打 `<major>.<minor>` 和 `latest`
-2. **npm**（`npm` job，依赖上一步成功）
+2. **macOS 签名与公证**（`sign-macos` job，依赖上一步成功，运行在 `macos-15`）
+   - 使用 `Developer ID Application` 证书（Hardened Runtime + 可信时间戳 + 固定标识 `com.skemind.lanesh`）对 `darwin_amd64` / `darwin_arm64` 二进制签名，保证 macOS TCC 目录权限在自动升级后持续有效
+   - 将两个签名后的二进制打包提交 Apple 公证（`xcrun notarytool submit --wait`）
+   - 重新打包 `darwin_*.tar.gz` 并更新 `checksums.txt`，覆盖上传后把 Draft Release 转为正式发布
+3. **npm**（`npm` job，依赖前两步成功）
    - 把 `build/npm/package.json` 的版本设为标签版本
    - 通过 npm trusted publishing 发布 `lanesh`，自动附带 provenance
    - 预发布版本（例如 `v0.2.0-rc.1`）发布到 `next` dist-tag，不影响 `latest`
@@ -55,6 +56,19 @@ trusted publishing 只能在 npmjs.com 上**已经存在的包**的设置页中�
 
 - 可见性为 **Public**，否则 Coolify 等平台匿名拉取会失败
 - 已关联 `jtsang4/lanesh` 仓库。镜像带有 `org.opencontainers.image.source` 标签，通常会自动关联
+
+### macOS 签名与公证 Secrets
+
+在仓库 **Settings → Secrets and variables → Actions** 配置以下 5 个必填 Secret（缺任一项 `sign-macos` 会报错阻断发布，避免发出未签名版本破坏 macOS TCC 授权）：
+
+- `MACOS_CERTIFICATE`：包含 `Developer ID Application` 证书的 `.p12` 文件的 base64
+- `MACOS_CERTIFICATE_PASSWORD`：上述 `.p12` 的导出密码
+- `MACOS_NOTARY_KEY`：App Store Connect Team API Key（`.p8`）的 base64
+- `MACOS_NOTARY_KEY_ID`：该 API Key 的 Key ID
+- `MACOS_NOTARY_ISSUER_ID`：App Store Connect 的 Issuer ID
+- `MACOS_SIGN_IDENTITY`（可选）：存在多张 `Developer ID Application` 证书时显式指定签名身份
+
+本地调试也可直接调用 `scripts/sign-macos.sh` 对构建出的二进制做签名和公证（通过 `MACOS_NOTARY_PROFILE` 使用本机 `notarytool` 钥匙串配置）。
 
 ## 发布步骤
 

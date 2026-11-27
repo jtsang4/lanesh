@@ -103,4 +103,7 @@ release:
   github:
     owner: jtsang4
     name: lanesh
+  # Created as draft so the sign-macos job can sign & notarize the darwin
+  # binaries, refresh checksums.txt, and publish atomically.
+  draft: true
   prerelease: auto

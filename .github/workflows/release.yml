@@ -50,9 +50,127 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  sign-macos:
+    name: Sign and notarize macOS
+    needs: goreleaser
+    runs-on: macos-15
+    permissions:
+      contents: write # replace darwin assets, update checksums.txt, publish draft release
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_KEY_B64: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Import signing certificate
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_CERTIFICATE_PASSWORD" ]; then
+            echo "::error::macOS signing secrets are missing (MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD)"
+            exit 1
+          fi
+          if [ -z "$MACOS_NOTARY_KEY_B64" ] || [ -z "$MACOS_NOTARY_KEY_ID" ] || [ -z "$MACOS_NOTARY_ISSUER_ID" ]; then
+            echo "::error::macOS notarization secrets are missing (MACOS_NOTARY_KEY, MACOS_NOTARY_KEY_ID, MACOS_NOTARY_ISSUER_ID)"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/lanesh.keychain-db"
+          password="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security default-keychain -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Sign, notarize and publish release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          work="$RUNNER_TEMP/release-macos"
+          notary_key="$RUNNER_TEMP/notary-key.p8"
+          trap 'rm -f "$notary_key"' EXIT
+          mkdir -p "$work"
+
+          echo "$MACOS_NOTARY_KEY_B64" | base64 --decode > "$notary_key"
+          chmod 600 "$notary_key"
+          export MACOS_NOTARY_KEY="$notary_key"
+          [ -n "$MACOS_SIGN_IDENTITY" ] || unset MACOS_SIGN_IDENTITY
+
+          amd64_bin="lanesh_${version}_darwin_amd64"
+          arm64_bin="lanesh_${version}_darwin_arm64"
+          amd64_tgz="${amd64_bin}.tar.gz"
+          arm64_tgz="${arm64_bin}.tar.gz"
+
+          gh release download "$GITHUB_REF_NAME" --dir "$work" \
+            --pattern "$amd64_bin" \
+            --pattern "$arm64_bin" \
+            --pattern "checksums.txt"
+
+          scripts/sign-macos.sh "$work/$amd64_bin" "$work/$arm64_bin"
+
+          for arch in amd64 arm64; do
+            bin="lanesh_${version}_darwin_${arch}"
+            tgz="${bin}.tar.gz"
+            stage="$work/pkg-${arch}"
+            mkdir -p "$stage"
+            cp "$work/$bin" "$stage/lanesh"
+            chmod 755 "$stage/lanesh"
+            cp LICENSE README.md "$stage/"
+            COPYFILE_DISABLE=1 tar -czf "$work/$tgz" -C "$stage" lanesh LICENSE README.md
+          done
+
+          python3 - "$work" "$amd64_bin" "$arm64_bin" "$amd64_tgz" "$arm64_tgz" <<'PY'
+          import hashlib, pathlib, sys
+          work = pathlib.Path(sys.argv[1])
+          targets = sys.argv[2:]
+          hashes = {}
+          for name in targets:
+              hashes[name] = hashlib.sha256((work / name).read_bytes()).hexdigest()
+          cs_path = work / "checksums.txt"
+          lines = cs_path.read_text().splitlines()
+          seen = set()
+          out = []
+          for line in lines:
+              parts = line.split()
+              if len(parts) == 2 and parts[1] in hashes:
+                  name = parts[1]
+                  out.append(f"{hashes[name]}  {name}")
+                  seen.add(name)
+              else:
+                  out.append(line)
+          missing = set(targets) - seen
+          if missing:
+              sys.exit(f"checksums.txt missing entries: {sorted(missing)}")
+          cs_path.write_text("\n".join(out) + "\n")
+          PY
+
+          (cd "$work" && grep -E "lanesh_${version}_darwin_" checksums.txt | shasum -a 256 -c -)
+
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            "$work/$amd64_bin" \
+            "$work/$arm64_bin" \
+            "$work/$amd64_tgz" \
+            "$work/$arm64_tgz" \
+            "$work/checksums.txt"
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/lanesh.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/notary-key.p8"
+
   npm:
     name: Publish to npm
-    needs: goreleaser
+    needs: [goreleaser, sign-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: read

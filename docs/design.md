@@ -748,9 +748,10 @@ LANESH_PUBLIC_URL=https://lanesh.example.com lanesh server
 - **前端**：先构建 `web/`，产物进入 `web/build/app/`，供 `go:embed` 使用。
 - **GoReleaser**：
   - 构建 `darwin`、`linux`、`windows` × `amd64`、`arm64`，`CGO_ENABLED=0`
-  - 产出压缩包（Windows 为 zip）、独立二进制（供 npm 启动器、安装脚本和自动升级使用）和 `checksums.txt`，发布到 GitHub Releases
+  - 产出压缩包（Windows 为 zip）、独立二进制（供 npm 启动器、安装脚本和自动升级使用）和 `checksums.txt`，先以 Draft Release 上传到 GitHub Releases
   - 构建多架构镜像，推送到 GHCR
-- **npm**：独立 job，把启动器包的版本设为标签版本后，通过 npm trusted publishing（GitHub Actions OIDC，无需长期 token）发布，并自动生成 provenance。预发布版本（标签含 `-`）发布到 `next` dist-tag。具体步骤见 `docs/releasing.md`。
+- **macOS 签名与公证**：独立 `sign-macos` job（`macos-15`）下载 `darwin` 二进制，通过 `scripts/sign-macos.sh` 使用 `Developer ID Application` 签名（固定标识 `com.skemind.lanesh`，使 macOS TCC 权限跨自动升级保持有效）并提交 Apple 公证，重打包 `darwin_*.tar.gz`、刷新 `checksums.txt` 后转为正式 Release。
+- **npm**：独立 job（等待签名发布完成），把启动器包的版本设为标签版本后，通过 npm trusted publishing（GitHub Actions OIDC，无需长期 token）发布，并自动生成 provenance。预发布版本（标签含 `-`）发布到 `next` dist-tag。具体步骤见 `docs/releasing.md`。
 - **版本注入**：通过 `-ldflags` 注入版本号、提交哈希和构建时间。
 - **CI**：仅文档改动时跳过；其他推送和 PR 按路径变更触发对应 job，涵盖三平台 Go 测试（`go mod tidy -diff`、`go vet`、`go test`）、三平台后台服务生命周期测试（`scripts/service-test.sh`）、三平台安装脚本测试（`scripts/install-test.sh`）、golangci-lint 与 actionlint、前端检查与构建、npm 启动器测试、GoReleaser 配置检查，以及快照镜像构建与容器冒烟测试。
 
@@ -780,7 +781,7 @@ build/
   package/Dockerfile
   npm/                     # npm 启动器包
 deployments/               # docker-compose 示例
-scripts/                   # dev.sh（本地演示环境）、service-test.sh（服务生命周期测试）、install-test.sh（安装脚本测试）
+scripts/                   # dev.sh（本地演示环境）、service-test.sh（服务生命周期测试）、install-test.sh（安装脚本测试）、sign-macos.sh（macOS 签名与公证）
 docs/                      # 设计、管理 API、发布流程
 .agents/skills/            # 项目级 skill
 .claude/skills/            # 指向 .agents/skills 的符号链接
