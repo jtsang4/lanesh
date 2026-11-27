@@ -147,11 +147,12 @@ func lcsDiff(a, b []string) []diffOp {
 		row := i * (n + 1)
 		nextRow := (i + 1) * (n + 1)
 		for j := n - 1; j >= 0; j-- {
-			if a[i] == b[j] {
+			switch {
+			case a[i] == b[j]:
 				dp[row+j] = dp[nextRow+j+1] + 1
-			} else if dp[nextRow+j] >= dp[row+j+1] {
+			case dp[nextRow+j] >= dp[row+j+1]:
 				dp[row+j] = dp[nextRow+j]
-			} else {
+			default:
 				dp[row+j] = dp[row+j+1]
 			}
 		}
