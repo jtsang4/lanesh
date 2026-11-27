@@ -145,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /lanes/{lane}/connect", s.handleConnect)
 	mux.HandleFunc("DELETE /lanes/{lane}/membership", s.handleLeave)
 	mux.Handle("/lanes/{lane}/mcp", s.mcp)
+	mux.Handle("/lanes/{lane}/v1/", s.consumerAPI())
 
 	mux.HandleFunc("POST /transfers/{id}/upload", s.transfers.upload)
 	mux.HandleFunc("GET /transfers/{id}/download", s.transfers.download)

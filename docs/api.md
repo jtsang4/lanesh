@@ -96,6 +96,7 @@ These are not part of the admin API but are listed for completeness:
 | `GET` | `/lanes/{lane}/connect` | machine credential | Daemon WebSocket (control protocol, see the design document §6). |
 | `DELETE` | `/lanes/{lane}/membership` | machine credential | A machine leaves the lane. |
 | `GET`, `POST`, `DELETE` | `/lanes/{lane}/mcp` | access key (`Authorization: Bearer` or `?key=`) | MCP Streamable HTTP endpoint. Optional `X-Lanesh-Machine` header or `?machine=` names the agent's own machine. |
+| `GET`, `POST` | `/lanes/{lane}/v1/*` | access key (`Authorization: Bearer`) | Stateless JSON consumer API used by the `lanesh` client CLI: `GET /machines`, `GET /machines/{m}/describe`, `GET /skills`, `POST /machines/{m}/skills/{read,grep}`, `POST /machines/{m}/exec`, `GET /machines/{m}/jobs`, `POST /machines/{m}/jobs/{job}/{read,write,kill}`, `POST /machines/{m}/files/{read,write,edit,list,grep}`, `POST /transfer`, `GET /projects`, `GET /projects/{project}`, `POST /projects/update`. |
 | `POST`, `GET` | `/transfers/{id}/upload`, `/transfers/{id}/download` | one-time ticket | Transfer data streams. Uploads may be split into `?part=N` requests, each preceded by an empty `?part=N&wait=1`, the last one with `final=1`; `202` asks for a request again (see design §7). |
 | `GET` | `/install.sh`, `/install.ps1` | none | Install scripts for the server's version. |
 | `GET` | `/healthz` | none | `{"status": "ok", "version": "…"}` |

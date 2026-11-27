@@ -536,6 +536,7 @@ Web UI 会为常见客户端生成可以直接复制的配置。
 | 路由 | 鉴权 | 说明 |
 |---|---|---|
 | `GET/POST/DELETE /lanes/{lane}/mcp` | access key | MCP 端点 |
+| `/lanes/{lane}/v1/*` | access key | 消费侧 JSON API（供 `lanesh` 客户端命令调用） |
 | `POST /lanes/{lane}/join` | join key | 机器加入 |
 | `GET /lanes/{lane}/connect` | machine credential | 守护进程 WebSocket |
 | `DELETE /lanes/{lane}/membership` | machine credential | 机器主动离开 Lane（`lanesh leave`） |
@@ -692,6 +693,13 @@ Windows 有两处特殊处理：
 
 | 命令 | 说明 |
 |---|---|
+| `lanesh connect <lane-url> [--key] [--machine]` / `disconnect` | 保存或清除消费侧 Lane URL 与 access key（写入 `~/.lanesh/client.toml`，支持 `/lanes/<id>` 或 `/lanes/<id>/mcp`） |
+| `lanesh machines` / `describe <m>` / `skills [query]` / `skills read\|grep` | 消费侧查看机器、环境与 skill（均支持 `--json`） |
+| `lanesh exec <m> [flags] -- <cmd...>` | 在远端执行命令并按 ≤30s 分片透明轮询输出（兼容 Cloudflare 等反向代理超时）；支持 `--bg`、`--timeout`、`--cwd`、`--skill`、`--env`、`--stdin` |
+| `lanesh jobs <m>` / `jobs read\|write\|kill` | 列出、读取/跟踪（`-f` / `--wait` / `--until` / `--match`）、写入或终止后台任务 |
+| `lanesh read` / `write` / `edit` / `ls` / `grep` | 读写、局部替换、列目录与搜索远端文件（`<machine>:<path>`） |
+| `lanesh cp <src> <dst> [--overwrite]` | 跨机器或本机与远端互拷（本机已加入同一 Lane 时自动走流式 `/transfer`，否则对 ≤1 MiB 单文件自动回退内联读写） |
+| `lanesh project list` / `get <p>` / `update <p>` | 读写共享项目及其位置实时探侦结果 |
 | `lanesh server` | 运行 Server |
 | `lanesh join <lane-url> --key <join-key> [--name] [--no-exec] [--no-service]` | 加入 Lane，把当前二进制复制到受管目录，安装并启动后台服务 |
 | `lanesh leave <lane> [--keep-service]` | 离开 Lane 并通知 Server；没有剩余 Lane 时卸载服务 |

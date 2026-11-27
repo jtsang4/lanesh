@@ -74,6 +74,9 @@ func (p Paths) Binary() string {
 // AdminConfig returns the CLI's admin credentials file.
 func (p Paths) AdminConfig() string { return filepath.Join(p.Home, "admin.toml") }
 
+// ClientConfig returns the CLI's consumer credentials file.
+func (p Paths) ClientConfig() string { return filepath.Join(p.Home, "client.toml") }
+
 // PolicyConfig holds optional policy settings; nil means "use the default".
 type PolicyConfig struct {
 	ExposeSkills *bool `toml:"expose_skills,omitempty"`
@@ -269,6 +272,19 @@ func ParseLaneURL(raw string) (server, laneID string, err error) {
 		base += "/" + prefix
 	}
 	return base, parts[len(parts)-1], nil
+}
+
+// ParseClientLaneURL is like ParseLaneURL, also accepting an MCP or consumer
+// API URL ending in /mcp or /v1.
+func ParseClientLaneURL(raw string) (server, laneID string, err error) {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	for _, suffix := range []string{"/mcp", "/v1"} {
+		if strings.HasSuffix(s, suffix) {
+			s = strings.TrimSuffix(s, suffix)
+			break
+		}
+	}
+	return ParseLaneURL(s)
 }
 
 func isLoopback(host string) bool {

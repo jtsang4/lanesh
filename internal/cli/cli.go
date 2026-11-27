@@ -35,6 +35,11 @@ func Execute() int {
 }
 
 func newRootCmd() *cobra.Command {
+	clientFlags = struct {
+		laneURL string
+		key     string
+		machine string
+	}{}
 	root := &cobra.Command{
 		Use:   "lanesh",
 		Short: "Connect all your machines for AI agents — with shared skills, shells, files, and projects",
@@ -51,10 +56,19 @@ share projects across them through one MCP endpoint.`,
 	}
 	root.PersistentFlags().StringVar(&homeFlag, "home", "", "Lanesh home directory (default $LANESH_HOME or ~/.lanesh)")
 	root.AddGroup(
+		&cobra.Group{ID: "client", Title: "Client commands:"},
 		&cobra.Group{ID: "machine", Title: "Machine commands:"},
 		&cobra.Group{ID: "admin", Title: "Administration:"},
 		&cobra.Group{ID: "server", Title: "Server:"},
 	)
+	for _, c := range []*cobra.Command{
+		newConnectCmd(), newDisconnectCmd(), newMachinesCmd(), newDescribeCmd(), newSkillsCmd(),
+		newExecCmd(), newJobsCmd(), newReadCmd(), newWriteCmd(), newEditCmd(), newLsCmd(), newGrepCmd(),
+		newCpCmd(), newProjectCmd(),
+	} {
+		c.GroupID = "client"
+		root.AddCommand(c)
+	}
 	for _, c := range []*cobra.Command{
 		newJoinCmd(), newLeaveCmd(), newStatusCmd(), newLogsCmd(), newStartCmd(), newStopCmd(), newRestartCmd(),
 		newUpdateCmd(), newDoctorCmd(), newConfigCmd(),

@@ -362,7 +362,8 @@ func newKeyCmd() *cobra.Command {
 				fmt.Fprintf(w, "Add to Claude Code (all projects):\n  claude mcp add --scope user --transport http lanesh %s --header \"Authorization: Bearer %s\"\n\n", url, res.Token)
 				fmt.Fprintf(w, "Add to Codex: put this in ~/.codex/config.toml (approve lets Codex use Lanesh without asking each time):\n\n"+
 					"  [mcp_servers.lanesh]\n  url = %q\n  default_tools_approval_mode = \"approve\"\n\n"+
-					"  [mcp_servers.lanesh.http_headers]\n  Authorization = \"Bearer %s\"\n", url, res.Token)
+					"  [mcp_servers.lanesh.http_headers]\n  Authorization = \"Bearer %s\"\n\n", url, res.Token)
+				fmt.Fprintf(w, "Connect with the Lanesh CLI:\n  lanesh connect %s/lanes/%s --key %s\n", c.server, l.ID, res.Token)
 			}
 			return nil
 		},
